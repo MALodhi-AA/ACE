@@ -1,0 +1,48 @@
+name: Monthly MIS
+version: "1.0"
+owner: MA
+description: Review monthly financial performance from a trial balance and produce a management (MIS) report with KPIs, variances, branch performance, GL movement review, exceptions and commentary.
+command: mis
+usage: "mis <file name in inbox>   (e.g. mis Mara_Sep2026_TB.xlsx)"
+
+# ---------------------------------------------------------------------------
+# MIS line mapping. Every TB account must be mapped to one of these lines,
+# either in the input file ("MIS Line" column) or in config/coa_mapping.csv.
+# ---------------------------------------------------------------------------
+pl_lines:
+  - Revenue
+  - Cost of Sales
+  - Payroll
+  - Rent
+  - Other Operating Expenses
+  - Other Income
+  - Depreciation
+  - Finance Costs
+  - Tax
+bs_lines:
+  - Non-Current Assets
+  - Cash
+  - Current Assets
+  - Current Liabilities
+  - Non-Current Liabilities
+  - Equity
+
+# Label used for Cost of Sales % in the report (F&B clients: "Food Cost %").
+cost_of_sales_label: Food Cost %
+
+# ---------------------------------------------------------------------------
+# Review thresholds - tune these as the skill is trained.
+# ---------------------------------------------------------------------------
+thresholds:
+  tb_balance_tolerance: 1.0          # AED rounding tolerance for TB check
+  gl_movement_abs: 10000             # flag GL month-on-month change >= AED 10,000 ...
+  gl_movement_pct: 0.25              # ... AND >= 25% (or new / disappeared balance)
+  gl_movement_top_n: 25              # max GL movements listed in report
+  kpi_change_pts: 2.0                # flag KPI % moving >= 2.0 percentage points
+  budget_variance_pct: 0.10          # flag P&L line >= 10% off budget
+  branch_revenue_decline_pct: 0.10   # flag branch revenue down >= 10% vs previous month
+
+# Keywords that trigger review exceptions (matched case-insensitively in account names)
+keywords:
+  suspense: [suspense, clearing, unallocated, unidentified, "to be allocated"]
+  intercompany: [intercompany, inter-company, inter company, "due from", "due to", related party]

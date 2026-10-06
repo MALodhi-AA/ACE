@@ -1,0 +1,20 @@
+# ACE - Synology Container Manager project
+# Place this repo at /volume1/docker/ace and create a Project pointing to it.
+services:
+  ace:
+    build: .
+    image: ace:0.1.0
+    container_name: ace
+    restart: unless-stopped
+    env_file: .env
+    user: "${PUID:-1026}:${PGID:-100}"
+    ports:
+      - "8080:8080"
+    volumes:
+      # Synology Drive shared folder: put TB/input files in inbox, reports appear in reports
+      - /volume1/ACE/inbox:/data/inbox:ro
+      - /volume1/ACE/reports:/data/reports
+      - /volume1/ACE/logs:/data/logs
+      # Skills and employee config are mounted so skill updates only need a restart
+      - ./skills:/app/skills:ro
+      - ./config:/app/config:ro

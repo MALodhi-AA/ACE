@@ -1,0 +1,23 @@
+# Secrets - NEVER commit
+.env
+*.env
+!.env.example
+
+# Runtime data (lives on Synology Drive, not in Git)
+data/inbox/*
+data/reports/*
+data/logs/*
+!data/**/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.pytest_data/
+
+# OS / Office
+.DS_Store
+Thumbs.db
+~$*

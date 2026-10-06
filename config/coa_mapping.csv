@@ -1,0 +1,30 @@
+account_code,account_name,mis_line
+4000,Food Sales,Revenue
+4010,Beverage Sales,Revenue
+4900,Miscellaneous Income,Other Income
+5000,Food Cost,Cost of Sales
+5010,Beverage Cost,Cost of Sales
+6000,Salaries and Wages,Payroll
+6010,Staff Accommodation,Payroll
+6100,Rent,Rent
+6200,Utilities,Other Operating Expenses
+6300,Marketing,Other Operating Expenses
+6400,Repairs and Maintenance,Other Operating Expenses
+6500,Delivery Commission,Other Operating Expenses
+7000,Depreciation,Depreciation
+7100,Bank Charges and Interest,Finance Costs
+1000,Property Plant and Equipment,Non-Current Assets
+1100,Cash at Bank,Cash
+1110,Petty Cash,Cash
+1200,Trade Receivables,Current Assets
+1210,Inventory,Current Assets
+1220,Prepayments,Current Assets
+1230,Due from Related Party,Current Assets
+1290,Suspense Account,Current Assets
+2000,Trade Payables,Current Liabilities
+2010,Accruals,Current Liabilities
+2020,VAT Payable,Current Liabilities
+2030,Due to Related Party,Current Liabilities
+2100,End of Service Benefits,Non-Current Liabilities
+3000,Share Capital,Equity
+3100,Retained Earnings,Equity
