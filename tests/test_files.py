@@ -17,9 +17,11 @@ def test_browse_client_folder(data_dir):
 
 def test_resolve_exact_and_fuzzy(data_dir):
     r = resolve_file("Clients/Mara/2026/09 Sep/Mara TB Sep 2026.xlsx")
-    assert r.source == "Clients" and r.path.name == "Mara TB Sep 2026.xlsx"
-    assert resolve_file("Clients/Mara/2026/09 Sep/tb sep").path.name == "Mara TB Sep 2026.xlsx"
-    assert resolve_file("sample_restaurant").source == "inbox"
+    assert r.source.name == "Clients" and r.name == "Mara TB Sep 2026.xlsx"
+    assert r.ref == "Clients/Mara/2026/09 Sep/Mara TB Sep 2026.xlsx"
+    assert resolve_file("Clients/Mara/2026/09 Sep/tb sep").name == "Mara TB Sep 2026.xlsx"
+    assert resolve_file("sample_restaurant").source.name == "inbox"
+    assert len(r.read()) > 1000
 
 
 @pytest.mark.parametrize("ref", [

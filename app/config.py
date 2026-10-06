@@ -76,7 +76,27 @@ class Settings:
     # Separator between sources is ";" (never used in Windows paths).
     sources_raw: str = field(default_factory=lambda: os.getenv("ACE_SOURCES", ""))
 
+    # --- Synology Drive NAS over SMB (v0.3) ---------------------------------
+    # ACE signs in to the NAS like a staff PC does and sees exactly the shared
+    # folders the `ace` account has permission for. Leave NAS_HOST empty to use
+    # local folders only (development / tests / Synology-hosted deployment).
+    nas_host: str = field(default_factory=lambda: os.getenv("NAS_HOST", os.getenv("NAS_IP", "")).strip())
+    nas_port: int = field(default_factory=lambda: int(os.getenv("NAS_PORT", "445") or 445))
+    nas_user: str = field(default_factory=lambda: os.getenv("NAS_USER", ""))
+    nas_password: str = field(default_factory=lambda: os.getenv("NAS_PASSWORD", ""))
+    # ACE's own share (inbox/ and reports/ inside it) - the ONLY share ACE writes to.
+    ace_share: str = field(default_factory=lambda: os.getenv("ACE_SHARE", "ACE").strip())
+    # Optional: fixed list of client shares (use if shares are hidden from browsing).
+    # Empty = discover every share the `ace` account can read.
+    nas_shares: list[str] = field(default_factory=lambda: [s.strip() for s in os.getenv("NAS_SHARES", "").split(";") if s.strip()])
+    # Shares never offered as client sources even if `ace` can read them.
+    nas_exclude: list[str] = field(default_factory=lambda: [s.strip() for s in os.getenv("NAS_EXCLUDE_SHARES", "").split(";") if s.strip()])
+
     timezone: str = field(default_factory=lambda: os.getenv("TZ", "Asia/Dubai"))
+
+    @property
+    def nas_configured(self) -> bool:
+        return bool(self.nas_host and self.nas_user and self.nas_password)
 
     @property
     def inbox_dir(self) -> Path:

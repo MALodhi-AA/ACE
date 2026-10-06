@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.2.0 |
+| **Version** | 0.3.0 |
 | **Role** | Financial Reporting Analyst |
 | **Authority** | Read-only (never posts or edits entries in any system) |
 | **Skills** | Monthly MIS v1.0 |
@@ -23,8 +23,9 @@ ACE  (Docker container on the HP server, port 8080)
         ├── Skills        skills/<skill>/        versioned procedures + code
         ├── AI model      app/llm.py             commentary and Q&A only, never arithmetic
         ├── Audit log     logs/audit.jsonl       every request, skill run and model call
-        ├── File sources  RS1619xs+ Clients     read-only over SMB (user "ace")
-        └── Reports  ──►  RS1619xs+ ACE/reports/<Company>/<Period>/  (visible in Synology Drive)
+        ├── File access   AA-RS (RS1619xs+)      signs in over SMB as "ace"; sees only the
+        │                                        client shares that account may read in DSM
+        └── Reports  ──►  AA-RS ACE/reports/<Company>/<Period>/  (visible in Synology Drive)
 ```
 
 The design rule is **AI Employee → Tools + Skills + Tasks + Permissions + Audit Log**, not
@@ -41,8 +42,8 @@ Send these to the bot in a direct message, or after `/ace` in a channel:
 | `help` | Command list |
 | `skills` | Skills with versions |
 | `ask <question>` | Ask a finance/accounting question (anything not recognised is also treated as a question) |
-| `files [folder]` | Browse the read-only file sources, e.g. `files Clients/Mara/2026` |
-| `mis <file>` | Run the Monthly MIS skill, e.g. `mis Clients/Mara/2026/09 Sep/TB.xlsx` (partial file names work) |
+| `files [folder]` | List the client folders ACE can read, or browse one, e.g. `files Food Box/2026` |
+| `mis <file>` | Run the Monthly MIS skill, e.g. `mis Food Box/2026/09 Sep/TB.xlsx` (partial file names work) |
 | `whoami` | Shows your Chat user id (for `ALLOWED_USERS`) |
 | `reset` | Clears conversation memory |
 
@@ -69,11 +70,11 @@ ace/
 ├── assets/ace-avatar.png     bot icon for Synology Chat
 ├── templates/
 │   └── MIS_Input_Template.xlsx
-├── tests/                    pytest suite (runs on every push via GitHub Actions)
+├── tests/                    pytest suite incl. SMB tests against a real Samba server (GitHub Actions)
 ├── tools/make_sample_data.py generates the template and a fictional sample TB
 ├── docs/                     setup guide and roadmap
 ├── Dockerfile
-├── docker-compose.yml        HP server (Docker Desktop, SMB volumes to the RS1619xs+)
+├── docker-compose.yml        HP server (Docker Desktop)
 ├── docker-compose.synology.yml  alternative: run on a Synology NAS
 └── .env.example              copy to .env (never committed)
 ```
@@ -86,7 +87,7 @@ python -m venv .venv
 pip install -r requirements-dev.txt
 copy .env.example .env            # then fill in values
 python tools/make_sample_data.py  # creates template + sample TB in data/inbox
-pytest                            # 29 tests, no API key or NAS needed
+pytest                            # unit tests, no API key or NAS needed (see docs/DEVELOPMENT.md for SMB tests)
 uvicorn app.main:app --port 8080
 ```
 
@@ -109,8 +110,9 @@ Alternative: [docs/SETUP_SYNOLOGY.md](docs/SETUP_SYNOLOGY.md) (Synology Containe
 - `.env` holds all secrets and is excluded by `.gitignore` and `.dockerignore`.
 - Every inbound Chat request is token-verified (constant-time compare); bad tokens get 401.
 - `ALLOWED_USERS` limits who can instruct the employee; refusals are logged.
-- Client files are mounted read-only and the `ace` NAS account only has read permission on them;
-  ACE can only open Excel/CSV files inside its named sources (no `..`, absolute paths or other shares).
+- ACE uses its own NAS account `ace` (never admin): read-only on the client shares you grant,
+  read/write only on its `ACE` share. The code additionally refuses to write anywhere else and
+  only opens Excel/CSV files inside permitted folders (no `..`, absolute paths or other servers).
 - The container runs as a non-root user.
 - Reports are never overwritten (`_v1`, `_v2`, …).
 - v0.1 has no write access to any accounting system.

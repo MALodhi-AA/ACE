@@ -5,6 +5,7 @@ saved as _v2, _v3 ... beside the first.
 """
 from __future__ import annotations
 
+import io
 import re
 from datetime import datetime
 from pathlib import Path
@@ -32,12 +33,12 @@ def _safe(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", s).strip("_") or "Company"
 
 
-def next_version_path(folder: Path, stem: str) -> Path:
-    folder.mkdir(parents=True, exist_ok=True)
+def next_version_parts(store, folder: list[str], stem: str) -> list[str]:
+    """Never overwrite: first free MIS_..._vN.xlsx in the folder."""
     n = 1
-    while (folder / f"{stem}_v{n}.xlsx").exists():
+    while store.exists(folder + [f"{stem}_v{n}.xlsx"]):
         n += 1
-    return folder / f"{stem}_v{n}.xlsx"
+    return folder + [f"{stem}_v{n}.xlsx"]
 
 
 class Sheet:
@@ -119,12 +120,13 @@ def _var_pct(a, b):
     return None if not b else (a - b) / abs(b)
 
 
-def write_report(res: dict[str, Any], commentary: str, commentary_source: str, out_root: Path,
-                 skill_version: str, requested_by: str) -> Path:
+def write_report(res: dict[str, Any], commentary: str, commentary_source: str, store,
+                 skill_version: str, requested_by: str) -> str:
+    """Build the workbook and save it through `store` (local folder or NAS). Returns where it was saved."""
     company, period = res["company"], res["period"] or "Period"
     stem = f"MIS_{_safe(company)}_{_safe(period)}"
-    path = next_version_path(out_root / _safe(company) / _safe(period), stem)
-    version_tag = path.stem.rsplit("_", 1)[-1]
+    parts = next_version_parts(store, [_safe(company), _safe(period)], stem)
+    version_tag = Path(parts[-1]).stem.rsplit("_", 1)[-1]
     sub = (f"{company} | {period} | {res['currency']} | Source: {res['source_file']} | "
            f"Prepared by ACE (Accountability's Chief Examiner) - Monthly MIS Skill v{skill_version} | "
            f"{datetime.now():%d-%b-%Y %H:%M} | Requested by {requested_by} | Report {version_tag} | DRAFT FOR REVIEW")
@@ -270,5 +272,6 @@ def write_report(res: dict[str, Any], commentary: str, commentary_source: str, o
     d.note("TB sign convention: debit positive, credit negative.")
     d.footer(company)
 
-    wb.save(path)
-    return path
+    buf = io.BytesIO()
+    wb.save(buf)
+    return store.save(parts, buf.getvalue())

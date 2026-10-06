@@ -1,16 +1,22 @@
 """Read-only access to client files.
 
-ACE may only read files inside the named sources configured in ACE_SOURCES
-(plus its own inbox). A reference looks like:
+Sources ACE can read from:
 
-    Clients/Mara/2026/09 Sep/TB.xlsx      -> source "Clients", relative path
-    Mara_Sep2026_TB.xlsx                  -> the inbox
-    sample                                -> fuzzy match in the inbox
+- **NAS shares** (main deployment): every shared folder on the Synology Drive
+  NAS that the `ace` account can read - one share per client, e.g. `Food Box`.
+- **inbox**: the `inbox` folder inside ACE's own share (or a local folder
+  when no NAS is configured).
+- **Local folders** from ACE_SOURCES (development / Synology-hosted setups).
 
-Back-slashes are accepted too (Clients\\Mara\\TB.xlsx). Anything that would
-escape a source root (.., absolute paths, other drives or shares) is refused.
-Write protection is enforced twice: ACE's code never writes to a source, and
-the `ace` account only has read permission on those shares.
+A reference looks like:
+
+    Food Box/2026/09 Sep/TB.xlsx     -> share "Food Box", path inside it
+    Food Box/2026/09 Sep/tb sep      -> fuzzy file name match in that folder
+    Mara_Sep2026_TB.xlsx             -> the inbox
+
+Back-slashes are accepted too. Anything that would escape a source (`..`,
+absolute paths, drive letters, other servers) is refused, and only Excel/CSV
+files can be read.
 """
 from __future__ import annotations
 
@@ -19,129 +25,228 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from app.config import settings
+from app.nas import Entry, NasError, nas
 
 READABLE = {".xlsx", ".xlsm", ".xls", ".csv"}
 MAX_LIST = 40
+SKIP_PREFIXES = ("~$", ".", "#", "@")
 
 
 class FileAccessError(ValueError):
     """Message is safe to show to the user."""
 
 
+# ---------------------------------------------------------------------------
+# Source back-ends
+# ---------------------------------------------------------------------------
+
+class LocalSource:
+    kind = "local"
+
+    def __init__(self, name: str, root: Path) -> None:
+        self.name, self.root = name, root
+
+    def describe(self) -> str:
+        return str(self.root)
+
+    def available(self) -> bool:
+        return self.root.exists()
+
+    def _path(self, parts: list[str]) -> Path:
+        p = self.root.joinpath(*parts)
+        try:
+            p.resolve(strict=False).relative_to(self.root.resolve(strict=False))
+        except ValueError as exc:
+            raise FileAccessError("That path is outside the folders I'm allowed to read.") from exc
+        return p
+
+    def is_dir(self, parts: list[str]) -> bool:
+        return self._path(parts).is_dir()
+
+    def is_file(self, parts: list[str]) -> bool:
+        return self._path(parts).is_file()
+
+    def list(self, parts: list[str]) -> list[Entry]:
+        out = []
+        for e in self._path(parts).iterdir():
+            st = e.stat()
+            out.append(Entry(e.name, e.is_dir(), st.st_size, datetime.fromtimestamp(st.st_mtime)))
+        return out
+
+    def read(self, parts: list[str]) -> bytes:
+        return self._path(parts).read_bytes()
+
+
+class SmbSource:
+    kind = "nas"
+
+    def __init__(self, name: str, share: str, base: list[str] | None = None) -> None:
+        self.name, self.share, self.base = name, share, list(base or [])
+
+    def describe(self) -> str:
+        return "\\\\" + settings.nas_host + "\\" + "\\".join([self.share, *self.base])
+
+    def available(self) -> bool:
+        return nas.is_dir(self.share, self.base)
+
+    def is_dir(self, parts: list[str]) -> bool:
+        return nas.is_dir(self.share, self.base + parts)
+
+    def is_file(self, parts: list[str]) -> bool:
+        return nas.is_file(self.share, self.base + parts)
+
+    def list(self, parts: list[str]) -> list[Entry]:
+        try:
+            return nas.scandir(self.share, self.base + parts)
+        except NasError as exc:
+            raise FileAccessError(str(exc)) from exc
+
+    def read(self, parts: list[str]) -> bytes:
+        try:
+            return nas.read_bytes(self.share, self.base + parts)
+        except NasError as exc:
+            raise FileAccessError(str(exc)) from exc
+
+
+def get_sources(refresh: bool = False) -> dict[str, LocalSource | SmbSource]:
+    """All sources ACE may read, keyed by the name users type."""
+    out: dict[str, LocalSource | SmbSource] = {}
+    if nas.configured:
+        out["inbox"] = SmbSource("inbox", settings.ace_share, ["inbox"])
+        try:
+            for share in nas.readable_shares(refresh=refresh):
+                out.setdefault(share, SmbSource(share, share))
+        except NasError:
+            pass  # status / files report the NAS problem; local sources still work
+    for name, root in settings.sources.items():
+        if name == "inbox" and "inbox" in out:
+            continue
+        out.setdefault(name, LocalSource(name, root))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Reference parsing and resolution
+# ---------------------------------------------------------------------------
+
 @dataclass
 class Resolved:
-    source: str
-    path: Path
+    source: LocalSource | SmbSource
+    parts: list[str]
+
+    @property
+    def name(self) -> str:
+        return self.parts[-1] if self.parts else self.source.name
 
     @property
     def ref(self) -> str:
-        root = settings.sources[self.source]
-        try:
-            rel = self.path.relative_to(root)
-            return f"{self.source}/{rel.as_posix()}" if str(rel) != "." else self.source
-        except ValueError:
-            return self.path.name
+        return "/".join([self.source.name, *self.parts])
+
+    def read(self) -> bytes:
+        return self.source.read(self.parts)
 
 
-def _split(ref: str) -> tuple[str | None, list[str]]:
+def _split(ref: str, sources: dict) -> tuple[str | None, list[str]]:
     ref = (ref or "").strip().strip('"').strip("'").replace("\\", "/")
-    parts = [p for p in PurePosixPath(ref).parts if p not in ("", "/", ".")]
+    raw = [p.strip() for p in PurePosixPath(ref).parts]
+    parts = [p for p in raw if p not in ("", "/", ".")]
     if not parts:
         return None, []
     if ref.startswith("/") or ":" in parts[0] or ".." in parts:
-        raise FileAccessError("Use a path inside one of my sources, e.g. `Clients/Mara/TB.xlsx`. "
+        raise FileAccessError("Use a path inside one of my folders, e.g. `Food Box/2026/09 Sep/TB.xlsx`. "
                               "Absolute paths and `..` are not allowed.")
-    lookup = {name.lower(): name for name in settings.sources}
+    lookup = {name.lower(): name for name in sources}
     if parts[0].lower() in lookup:
         return lookup[parts[0].lower()], parts[1:]
     return None, parts
 
 
-def _inside(path: Path, root: Path) -> bool:
-    try:
-        path.resolve(strict=False).relative_to(root.resolve(strict=False))
-        return True
-    except ValueError:
-        return False
+def _source(name: str, sources: dict):
+    src = sources[name]
+    if not src.available():
+        if src.kind == "nas" and nas.last_error:
+            raise FileAccessError(f"I can't reach the NAS right now: {nas.last_error}")
+        raise FileAccessError(f"I can't reach the '{name}' folder ({src.describe()}) right now. "
+                              "Check the NAS / network share and my read permission.")
+    return src
 
 
-def _root(source: str) -> Path:
-    root = settings.sources[source]
-    if not root.exists():
-        raise FileAccessError(f"I can't reach the '{source}' folder ({root}) right now. "
-                              "Check the network share and my read permission.")
-    return root
+def _fmt_time(dt: datetime | None) -> str:
+    if dt is None:
+        return ""
+    if dt.tzinfo is not None:
+        from zoneinfo import ZoneInfo
+        dt = dt.astimezone(ZoneInfo(settings.timezone))
+    return f"{dt:%d-%b-%Y %H:%M}"
+
+
+def _visible(e: Entry) -> bool:
+    return not e.name.startswith(SKIP_PREFIXES)
 
 
 def resolve_file(ref: str) -> Resolved:
-    """Resolve a user reference to a readable file inside a source."""
-    source, parts = _split(ref)
+    """Resolve a user reference to a readable Excel/CSV file inside a source."""
+    sources = get_sources()
+    name, parts = _split(ref, sources)
     if not parts:
-        raise FileAccessError("Which file? e.g. `mis Clients/Mara/2026/09/TB.xlsx` - send `files` to browse.")
-    source = source or "inbox"
-    root = _root(source)
-    candidate = root.joinpath(*parts)
-    if not _inside(candidate, root):
-        raise FileAccessError("That path is outside the folders I'm allowed to read.")
+        raise FileAccessError("Which file? e.g. `mis Food Box/2026/09 Sep/TB.xlsx` - send `files` to browse.")
+    src = _source(name or "inbox", sources)
 
-    if candidate.is_file():
-        found = candidate
+    if src.is_file(parts):
+        found = parts
     else:
-        # forgiving match on the last part: case-insensitive, extension optional, unique substring
-        folder = candidate.parent
-        if not folder.is_dir():
-            raise FileAccessError(f"Folder not found: {Resolved(source, folder).ref}")
+        folder = parts[:-1]
+        if not src.is_dir(folder):
+            raise FileAccessError(f"Folder not found: {'/'.join([src.name, *folder])}")
         want = parts[-1].lower()
-        files = [f for f in folder.iterdir() if f.is_file() and f.suffix.lower() in READABLE
-                 and not f.name.startswith(("~$", "."))]
-        exact = [f for f in files if f.name.lower() == want or f.stem.lower() == want]
-        partial = [f for f in files if want in f.name.lower()]
+        files = [e for e in src.list(folder) if not e.is_dir and _visible(e)
+                 and Path(e.name).suffix.lower() in READABLE]
+        exact = [e for e in files if e.name.lower() == want or Path(e.name).stem.lower() == want]
+        partial = [e for e in files if want in e.name.lower()]
         if exact:
-            found = exact[0]
+            found = folder + [exact[0].name]
         elif len(partial) == 1:
-            found = partial[0]
+            found = folder + [partial[0].name]
         elif partial:
-            raise FileAccessError("More than one file matches: " + ", ".join(f.name for f in partial[:6]))
+            raise FileAccessError("More than one file matches: " + ", ".join(e.name for e in partial[:6]))
         else:
-            raise FileAccessError(f"No file matching '{parts[-1]}' in {Resolved(source, folder).ref}. "
+            raise FileAccessError(f"No file matching '{parts[-1]}' in {'/'.join([src.name, *folder])}. "
                                   "Send `files <folder>` to see what is there.")
-    if found.suffix.lower() not in READABLE:
+    if Path(found[-1]).suffix.lower() not in READABLE:
         raise FileAccessError(f"I can only read Excel/CSV files ({', '.join(sorted(READABLE))}).")
-    if not _inside(found, root):
-        raise FileAccessError("That path is outside the folders I'm allowed to read.")
-    return Resolved(source, found)
+    return Resolved(src, found)
 
 
 def list_folder(ref: str = "") -> str:
-    """Chat-friendly listing of a source folder, or of the sources themselves."""
-    source, parts = _split(ref)
-    if source is None and not parts:
-        lines = ["My file sources (read-only):"]
-        for name, root in settings.sources.items():
-            ok = root.exists()
-            lines.append(f"- {name}  {'✓' if ok else '✗ unreachable'}  ({root})")
-        lines += ["", "Browse with `files <source>/<folder>`, e.g. `files Clients/Mara`."]
+    """Chat-friendly listing of a folder, or of the sources themselves."""
+    sources = get_sources(refresh=not (ref or "").strip())
+    name, parts = _split(ref, sources)
+    if name is None and not parts:
+        lines = ["Folders I can read (read-only):"]
+        if nas.configured and nas.last_error:
+            lines.append(f"⚠️ NAS problem: {nas.last_error}")
+        elif nas.configured and len([s for s in sources.values() if s.kind == "nas"]) <= 1:
+            lines.append("- (no client folders yet - give the `ace` account Read only on a client's shared folder in DSM)")
+        for src in sources.values():
+            ok = src.available()
+            label = "my inbox" if src.name == "inbox" else ""
+            lines.append(f"- {src.name}  {'✓' if ok else '✗ unreachable'}" + (f"  ({label})" if label else ""))
+        lines += ["", "Browse with `files <folder>`, e.g. `files Food Box/2026`."]
         return "\n".join(lines)
-    if source is None:
-        source, parts = "inbox", parts
-    root = _root(source)
-    folder = root.joinpath(*parts)
-    if not _inside(folder, root):
-        raise FileAccessError("That path is outside the folders I'm allowed to read.")
-    if not folder.is_dir():
-        raise FileAccessError(f"Folder not found: {Resolved(source, folder).ref}")
+    src = _source(name or "inbox", sources)
+    if not src.is_dir(parts):
+        raise FileAccessError(f"Folder not found: {'/'.join([src.name, *parts])}")
 
-    entries = [e for e in folder.iterdir() if not e.name.startswith(("~$", ".", "#", "@"))]
-    dirs = sorted((e for e in entries if e.is_dir()), key=lambda e: e.name.lower())
-    files = sorted((e for e in entries if e.is_file() and e.suffix.lower() in READABLE),
-                   key=lambda e: e.stat().st_mtime, reverse=True)
-    here = Resolved(source, folder).ref
+    entries = [e for e in src.list(parts) if _visible(e)]
+    dirs = sorted((e for e in entries if e.is_dir), key=lambda e: e.name.lower())
+    files = sorted((e for e in entries if not e.is_dir and Path(e.name).suffix.lower() in READABLE),
+                   key=lambda e: (e.mtime.timestamp() if e.mtime else 0), reverse=True)
+    here = "/".join([src.name, *parts])
     lines = [f"{here}/  ({len(dirs)} folders, {len(files)} Excel/CSV files)"]
-    for d in dirs[:MAX_LIST]:
-        lines.append(f"📁 {d.name}/")
+    lines += [f"📁 {d.name}/" for d in dirs[:MAX_LIST]]
     for f in files[:MAX_LIST]:
-        st = f.stat()
-        lines.append(f"📄 {f.name}  ({st.st_size/1024:,.0f} KB, {datetime.fromtimestamp(st.st_mtime):%d-%b-%Y %H:%M})")
+        when = _fmt_time(f.mtime)
+        lines.append(f"📄 {f.name}  ({f.size/1024:,.0f} KB{', ' + when if when else ''})")
     if len(dirs) > MAX_LIST or len(files) > MAX_LIST:
         lines.append(f"… list truncated to {MAX_LIST} folders / files")
     if not dirs and not files:

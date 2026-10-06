@@ -9,4 +9,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
-      - run: pytest
+      - name: Start Samba test server (mimics the Synology Drive NAS)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q samba smbclient
+          sudo bash tools/smb_test_server.sh
+      - name: Unit + SMB integration tests
+        env:
+          ACE_TEST_SMB: 127.0.0.1:4445
+          ACE_TEST_SMB_PASSWORD: AcePass123
+        run: pytest -v

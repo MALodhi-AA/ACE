@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TZ=Asia/Dubai
 
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends tzdata curl \
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata curl smbclient \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin ace

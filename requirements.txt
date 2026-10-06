@@ -7,3 +7,4 @@ openpyxl>=3.1
 PyYAML>=6.0
 python-multipart>=0.0.9
 tzdata>=2024.1
+smbprotocol>=1.13

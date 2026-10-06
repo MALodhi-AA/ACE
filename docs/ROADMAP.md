@@ -10,7 +10,7 @@ any action.
 | 2 | Private GitHub repo `MALodhi-AA/ACE`, `.env` outside Git, CI tests | ✅ v0.1 |
 | 3 | Synology Chat: `status`, `ask`, chatbot + slash command | ✅ built (deploy pending) |
 | 4 | First skill: Monthly MIS v1.0 | ✅ v0.1 |
-| 4b | Runs on the HP server; reads client files directly from the Drive NAS (read-only) | ✅ v0.2 |
+| 4b | Runs on the HP server; NAS access like an employee (own `ace` account, per-client share permissions) | ✅ v0.3 |
 | 5 | Train MIS on real historical TBs without Tally (v1.1, v1.2 …) | ⏭ next |
 | 6 | Tally connector, 100 % read-only (TB, P&L, BS, ledgers, vouchers, cost centres) | planned |
 | 7 | Task engine: AI tasks + human tasks via the existing task bot; recheck on `/task done` | planned |

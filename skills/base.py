@@ -26,7 +26,7 @@ import yaml
 class SkillResult:
     ok: bool
     chat_summary: str
-    report_path: Path | None = None
+    report_path: str | None = None   # local path or NAS location (share/reports/...)
     details: dict[str, Any] = field(default_factory=dict)
 
 

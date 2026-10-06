@@ -20,7 +20,8 @@ import yaml
 
 from app.audit import audit
 from app.config import ROOT_DIR, settings
-from app.files import FileAccessError, list_folder
+from app.files import FileAccessError, get_sources, list_folder
+from app.nas import nas
 from app.llm import llm
 from skills.registry import SKILLS, by_command
 
@@ -101,13 +102,20 @@ def status_text(check_ai: bool = True) -> str:
         elif kind == "ai":
             ok, note = ai_ok, f" ({ai_note})" if ai_note else ""
         elif kind == "storage":
-            ok, note = settings.reports_dir.exists(), ""
+            if nas.configured:
+                ok, note = nas.is_dir(settings.ace_share, ["reports"]), f" ({settings.ace_share}/reports)"
+            else:
+                ok, note = settings.reports_dir.exists(), ""
         else:
             ok, note = False, ""
         lines.append(f"{sysdef['label']} {_tick(ok)}{note}")
-    lines += ["", "File sources (read-only):"]
-    for name, root in settings.sources.items():
-        lines.append(f"{name} {_tick(root.exists())}")
+    lines += ["", "File access:"]
+    if nas.configured:
+        ok, note = nas.status()
+        lines.append(f"Drive NAS ({settings.nas_host}) as '{settings.nas_user}' {_tick(ok)} - {note}")
+    for src in get_sources().values():
+        if src.kind == "local":
+            lines.append(f"{src.name} (local) {_tick(src.available())}")
     if not settings.allowed_users:
         lines += ["", "⚠️ ALLOWED_USERS is empty - anyone in Chat can use me."]
     return "\n".join(lines)
@@ -121,7 +129,7 @@ def help_text() -> str:
         "status - who I am, my skills and connected systems",
         "skills - skill details and versions",
         "ask <question> - ask me a finance/accounting question",
-        "files [folder] - browse my read-only file sources, e.g. files Clients/Mara",
+        "files [folder] - browse the client folders I can read, e.g. files Food Box/2026",
     ]
     for s in SKILLS.values():
         lines.append(f"{s.usage} - {s.name}")

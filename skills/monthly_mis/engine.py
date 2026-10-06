@@ -5,6 +5,7 @@ are reproducible and testable. The AI model never does arithmetic.
 """
 from __future__ import annotations
 
+import io
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -96,17 +97,33 @@ def load_mapping(path: Path) -> tuple[dict[str, str], dict[str, str]]:
     return by_code, by_name
 
 
-def load_input(path: Path, cfg: dict, mapping_path: Path | None = None) -> MISInput:
-    if not path.exists():
-        raise MISInputError(f"File not found: {path.name}")
-    try:
-        xls = pd.ExcelFile(path)
-    except Exception as exc:  # noqa: BLE001
-        raise MISInputError(f"Could not open {path.name} as Excel: {exc}") from exc
+def load_input(source: Path | bytes, cfg: dict, mapping_path: Path | None = None,
+               name: str | None = None) -> MISInput:
+    """`source` is a local path or the file's bytes (e.g. read from the NAS); `name` is its file name."""
+    if isinstance(source, Path):
+        if not source.exists():
+            raise MISInputError(f"File not found: {source.name}")
+        name = name or source.name
+        data = source
+    else:
+        name = name or "input.xlsx"
+        data = io.BytesIO(source)
+    stem = Path(name).stem
 
-    info = _read_info(xls)
-    tb_sheet = next((n for n in xls.sheet_names if _norm(n) in {"tb", "trial balance"}), xls.sheet_names[0])
-    raw = pd.read_excel(xls, sheet_name=tb_sheet, header=None)
+    if name.lower().endswith(".csv"):
+        try:
+            raw = pd.read_csv(data, header=None)
+        except Exception as exc:  # noqa: BLE001
+            raise MISInputError(f"Could not read {name} as CSV: {exc}") from exc
+        info: dict[str, str] = {}
+    else:
+        try:
+            xls = pd.ExcelFile(data)
+        except Exception as exc:  # noqa: BLE001
+            raise MISInputError(f"Could not open {name} as Excel: {exc}") from exc
+        info = _read_info(xls)
+        tb_sheet = next((n for n in xls.sheet_names if _norm(n) in {"tb", "trial balance"}), xls.sheet_names[0])
+        raw = pd.read_excel(xls, sheet_name=tb_sheet, header=None)
     hdr = _find_header_row(raw)
     df = raw.iloc[hdr + 1:].copy()
     df.columns = [_norm(c) for c in raw.iloc[hdr].tolist()]
@@ -159,10 +176,10 @@ def load_input(path: Path, cfg: dict, mapping_path: Path | None = None) -> MISIn
     has_branches = df["branch"].replace("", pd.NA).dropna().nunique() > 1
     df.loc[df["branch"] == "", "branch"] = "Unallocated" if has_branches else "All"
 
-    company = info.get("company") or path.stem.split("_")[0]
+    company = info.get("company") or stem.split("_")[0]
     period = info.get("period") or ""
     currency = info.get("currency") or "AED"
-    return MISInput(company, period, currency, df.reset_index(drop=True), path.name, has_branches, provided)
+    return MISInput(company, period, currency, df.reset_index(drop=True), name, has_branches, provided)
 
 
 # ---------------------------------------------------------------------------

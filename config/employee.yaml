@@ -6,7 +6,7 @@
 name: ACE
 handle: ACE
 full_name: Accountability's Chief Examiner
-version: 0.2.0
+version: 0.3.0
 role: Financial Reporting Analyst
 organisation: Accountability Accountants
 
@@ -34,7 +34,7 @@ systems:
     label: AI Model
     kind: ai
   - key: reports
-    label: Synology Drive (reports)
+    label: Reports folder
     kind: storage
   - key: tally
     label: Tally

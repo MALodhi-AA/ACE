@@ -1,35 +1,47 @@
 # Setting up ACE on the HP server
 
 ACE runs as a Linux container in **Docker Desktop on the HP server** (Windows Server),
-next to your existing `ocr-engine` stack. It talks to two Synology machines over the LAN:
+next to your existing `ocr-engine` stack. It works with two Synology machines over the LAN:
 
 ```text
  Staff ── Synology Chat (DS723+) ──POST /synology/bot──►  ACE container (HP server :8080)
                        ▲                                     │   │
-                       └──── replies via Chat API ───────────┘   │ SMB (user "ace")
+                       └──── replies via Chat API ───────────┘   │ signs in over SMB as "ace"
                                                                  ▼
-                                      RS1619xs+  ─ Clients share  (read-only)
-                                                 ─ ACE share      (inbox + reports, read/write)
-                                      Anthropic API (internet) ◄── commentary / questions
+                       AA-RS / RS1619xs+ (192.168.2.142)
+                         ├─ client shares (Food Box, FALA Hospitality, …)  read-only, as permitted in DSM
+                         └─ ACE share (inbox/, reports/)                    read/write
+                       Anthropic API (internet) ◄── commentary / questions
 ```
+
+**ACE is given access like an employee.** It signs in to AA-RS with its own `ace` account and
+sees exactly the shared folders that account is allowed to read. To give ACE a client, grant
+`ace` *Read only* on that client's shared folder in DSM – no change to ACE is needed. To take
+it away, set *No access*. The HP server's mapped network drives are not used.
 
 Time needed: about 45 minutes.
 
-## 1. On the RS1619xs+ (Drive NAS): ACE's account and folder
+## 1. On AA-RS (RS1619xs+): ACE's account and desk
 
-1. **Shared folder** – Control Panel → Shared Folder → Create `ACE`.
-   Inside it (File Station) create `inbox` and `reports`.
-   Enable it as a Drive **Team Folder** if staff should see reports in Synology Drive.
-2. **User** – Control Panel → User & Group → Create `ace`:
+1. **ACE's shared folder** – Control Panel → Shared Folder → Create `ACE`.
+   In File Station create two folders inside it: `inbox` and `reports`.
+   Enable it as a Drive **Team Folder** if staff should open reports in Synology Drive.
+2. **User `ace`** – Control Panel → User & Group → Create:
    - Description: *AI employee service account – no interactive login. Owner: MA*
-   - Password: long, **letters and digits only** (it goes into an SMB mount option).
-   - Groups: **users** only.
-   - Shared folders: `ACE` → **Read/Write**; client folder(s) (e.g. `Clients`) → **Read only**;
-     everything else → **No access**.
+   - Password: long and random (store it in your password manager).
+   - Groups: **users** only (never administrators).
+   - Shared folders:
+     - `ACE` → **Read/Write**
+     - client shares ACE should work on → **Read only** (start with one or two)
+     - everything else (backups, `AA Team`, `chat`, `docker`, `homes`, …) → **No access**
    - Applications: **Allow SMB only**, Deny everything else.
-3. Make sure SMB is on (Control Panel → File Services → SMB) with minimum version SMB2 or higher.
+3. SMB must be enabled (Control Panel → File Services → SMB). SMB2 or SMB3 minimum is fine.
+4. Recommended: reserve 192.168.2.142 for AA-RS in the router's DHCP (or set a fixed IP in DSM).
 
-You can delete the `ACE` user/folder created earlier on the SA3600 – it is no longer used.
+**Never use the NAS admin account for ACE.**
+
+Giving ACE another client later: Control Panel → Shared Folder → select the client → Edit →
+Permissions → `ace` → **Read only** → Save. ACE sees it within a minute.
 
 ## 2. On the DS723+ (Chat NAS): create the bot
 
@@ -59,9 +71,8 @@ Fill in `.env`:
 | `ANTHROPIC_API_KEY` | console.anthropic.com → API keys (set a monthly spend limit there) |
 | `SYNOLOGY_BASE_URL` | `http://<DS723+ LAN IP>:5000` |
 | `SYNOLOGY_BOT_TOKEN` | token from step 2 |
-| `NAS_IP` | LAN IP of the RS1619xs+ |
-| `NAS_USER` / `NAS_PASSWORD` | the `ace` account from step 1 |
-| `CLIENTS_SHARE` | exact name of the client shared folder on the RS1619xs+ |
+| `NAS_HOST` | `192.168.2.142` |
+| `NAS_USER` / `NAS_PASSWORD` | `ace` and its password from step 1 |
 | `ACE_SHARE` | `ACE` |
 | `ALLOWED_USERS` | leave empty for the first test, then fill in (step 6) |
 
@@ -97,14 +108,14 @@ In Docker Desktop you will see a new **ace** stack next to `ocr-engine-main`.
 
 Message the ACE bot in Synology Chat:
 
-1. `status` – everything should be ✓ except Tally/Odoo/Finance DB/Task Management.
-   "File sources" should show `Clients ✓` and `inbox ✓`.
+1. `status` – Synology Chat ✓, AI Model ✓, Reports folder ✓ (ACE/reports), and under
+   *File access*: `Drive NAS (192.168.2.142) as 'ace' ✓ - N client folders`.
 2. `whoami` → add your user_id (and finance staff) to `ALLOWED_USERS` in `.env`, then
    `docker compose up -d` (re-reads `.env`).
 3. `ask Explain EBITDA`
-4. `files Clients` → browse to a client month, then e.g.
-   `mis Clients/Mara/2026/09 Sep/TB.xlsx`
-5. Open the report from `ACE/reports/...` in Synology Drive.
+4. `files` → the client folders ACE can read; `files Food Box` → browse; then e.g.
+   `mis Food Box/2026/09 Sep/TB.xlsx` (part of the file name is enough).
+5. Open the report from `ACE/reports/<Company>/<Period>/` in Synology Drive.
 
 ## Keeping it running after a reboot
 
@@ -132,11 +143,12 @@ Changes only under `skills/` or `config/` need just `docker compose restart ace`
 
 | Symptom | Check |
 |---|---|
-| Container exits at start with *mount error(13): Permission denied* | `NAS_USER`/`NAS_PASSWORD` wrong, or `ace` not allowed SMB on the RS1619xs+ |
-| *mount error(2): No such file or directory* | `CLIENTS_SHARE` / `ACE_SHARE` name doesn't match the shared folder name exactly |
-| Changed NAS settings in `.env` but nothing changes | Docker keeps SMB volume settings: `docker compose down`, `docker volume rm ace_clients ace_ace_share`, `docker compose up -d` |
+| `status`: *NT_STATUS_LOGON_FAILURE* | `NAS_USER`/`NAS_PASSWORD` wrong, or SMB not allowed for `ace` (Applications) |
+| `status`: *did not answer in time* | `NAS_HOST` wrong or AA-RS unreachable from the HP server |
+| `files` shows no client folders | `ace` has no *Read only* permission on any client share yet |
+| A client folder is missing from `files` | permission not granted, or the share is hidden from browsing – add it to `NAS_SHARES` |
+| *couldn't save the report* | `ace` needs Read/Write on `ACE`, and `ACE/reports` must exist |
 | Bot never answers | `docker compose logs ace`; firewall rule allows the DS723+ IP? Outgoing URL uses the HP server's LAN IP? |
 | `401` in logs | Bot token in `.env` doesn't match the bot |
 | `Synology Chat ✗` / replies not delivered | `SYNOLOGY_BASE_URL` must be the DS723+ LAN IP, reachable from the HP server |
-| `Clients ✗ unreachable` in status | RS1619xs+ offline or share renamed; ACE keeps answering other commands |
 | `AI Model ✗` | API key, spend limit, or outbound internet from the HP server |

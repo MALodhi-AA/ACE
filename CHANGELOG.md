@@ -1,6 +1,22 @@
 # Changelog
 
-## 0.2.0 — 2026-10-06
+## 0.3.0 — 2026-10-07
+
+ACE gets NAS access like an employee.
+
+- ACE signs in to the Synology Drive NAS (AA-RS) over SMB as its own `ace` account and sees
+  exactly the shared folders that account may read in DSM - one share per client. Granting or
+  removing a client is a DSM permission change; no ACE config or restart needed.
+- `files` lists the client folders ACE can read; `files Food Box/2026` browses;
+  `mis Food Box/2026/09 Sep/TB.xlsx` reads straight from the client share.
+- Inbox and reports live in ACE's own `ACE` share (`inbox/`, `reports/`); ACE writes nowhere else
+  (enforced in code and by the account's DSM permissions).
+- No Docker volumes / CIFS mounts any more: works the same in Docker Desktop on Windows.
+- CSV input supported; clear NAS error messages (bad password, unreachable, no permission).
+- New: `app/nas.py`, `app/storage.py`, `tools/smb_test_server.sh`, `docs/DEVELOPMENT.md`.
+  SMB integration tests run against a real Samba server in GitHub Actions (36 tests).
+
+## 0.2.0 — 2026-10-06 (not deployed; superseded by 0.3.0)
 
 ACE moves to the HP server and reads client files directly from the Synology Drive NAS.
 

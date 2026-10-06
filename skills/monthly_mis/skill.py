@@ -10,6 +10,7 @@ from app.config import ROOT_DIR, settings
 from skills.base import SkillResult
 from skills.monthly_mis import commentary as cm
 from app.files import FileAccessError, resolve_file
+from app.storage import report_store
 from skills.monthly_mis.engine import MISInputError, analyse, load_input
 from skills.monthly_mis.report import write_report
 
@@ -52,15 +53,15 @@ def chat_summary(res: dict, report_rel: str, version: str, seconds: float, ai_so
 
 
 def run(file_ref: str, requested_by: str = "unknown", persona: str = "", use_ai: bool = True,
-        reports: Path | None = None) -> SkillResult:
-    """`file_ref` is a source path such as `Clients/Mara/2026/09/TB.xlsx` or an inbox file name."""
+        store=None) -> SkillResult:
+    """`file_ref` is a source path such as `Food Box/2026/09 Sep/TB.xlsx` or an inbox file name."""
     t0 = time.monotonic()
     cfg = _cfg()
     version = str(cfg.get("version"))
-    reports = reports or settings.reports_dir
+    store = store or report_store()
     try:
         resolved = resolve_file(file_ref)
-        inp = load_input(resolved.path, cfg, MAPPING_PATH)
+        inp = load_input(resolved.read(), cfg, MAPPING_PATH, name=resolved.name)
         inp.source_file = resolved.ref
         res = analyse(inp, cfg)
     except (MISInputError, FileAccessError) as exc:
@@ -73,8 +74,11 @@ def run(file_ref: str, requested_by: str = "unknown", persona: str = "", use_ai:
         text, source = cm.rule_based(res, version), "rule-based"
 
     res["_tb"] = inp.tb
-    report = write_report(res, text, source, reports, version, requested_by)
-    summary = chat_summary(res, str(report), version, time.monotonic() - t0, source)
+    try:
+        report = write_report(res, text, source, store, version, requested_by)
+    except Exception as exc:  # noqa: BLE001 - e.g. NAS write failure
+        return SkillResult(ok=False, chat_summary=f"⚠️ The MIS was calculated but I couldn't save the report: {exc}")
+    summary = chat_summary(res, report, version, time.monotonic() - t0, source)
     res.pop("_tb", None)
     return SkillResult(ok=True, chat_summary=summary, report_path=report,
                        details={"source": resolved.ref, "commentary": text, "commentary_source": source,

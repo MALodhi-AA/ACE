@@ -3,7 +3,7 @@ version: "1.0"
 owner: MA
 description: Review monthly financial performance from a trial balance and produce a management (MIS) report with KPIs, variances, branch performance, GL movement review, exceptions and commentary.
 command: mis
-usage: "mis <file>   (e.g. mis Clients/Mara/2026/09 Sep/TB.xlsx  or an inbox file name)"
+usage: "mis <file>   (e.g. mis Food Box/2026/09 Sep/TB.xlsx  or an inbox file name)"
 
 # ---------------------------------------------------------------------------
 # MIS line mapping. Every TB account must be mapped to one of these lines,

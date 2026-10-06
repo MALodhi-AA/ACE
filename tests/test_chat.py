@@ -133,4 +133,4 @@ def test_files_and_mis_from_source_via_chat(client, sent):
     bot(client, "mis ../secret.xlsx")
     assert "not allowed" in sent[-1]["payload"]["text"]
     bot(client, "status")
-    assert "File sources (read-only):" in sent[-1]["payload"]["text"] and "Clients ✓" in sent[-1]["payload"]["text"]
+    assert "File access:" in sent[-1]["payload"]["text"] and "Clients (local) ✓" in sent[-1]["payload"]["text"]

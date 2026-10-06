@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pandas as pd
 import pytest
 import yaml
@@ -63,10 +65,11 @@ def test_run_writes_versioned_report(data_dir):
     r1 = run("sample_restaurant", requested_by="test", use_ai=False)
     r2 = run("Sample_Restaurant_Sep2026_TB.xlsx", requested_by="test", use_ai=False)
     assert r1.ok and r2.ok
-    v1 = int(r1.report_path.stem.rsplit("_v", 1)[1])
-    v2 = int(r2.report_path.stem.rsplit("_v", 1)[1])
-    assert v2 == v1 + 1 and r1.report_path.exists()      # never overwritten
-    wb = load_workbook(r1.report_path)
+    p1, p2 = Path(r1.report_path), Path(r2.report_path)
+    v1 = int(p1.stem.rsplit("_v", 1)[1])
+    v2 = int(p2.stem.rsplit("_v", 1)[1])
+    assert v2 == v1 + 1 and p1.exists()      # never overwritten
+    wb = load_workbook(p1)
     assert {"Summary", "P&L", "Balance Sheet", "Branches", "GL Movements", "Exceptions", "Commentary", "TB Mapping"} <= set(wb.sheetnames)
     assert "MIS completed" in r1.chat_summary
 
