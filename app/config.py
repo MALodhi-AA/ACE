@@ -64,21 +64,45 @@ class Settings:
     allowed_users: list[str] = field(default_factory=lambda: _list("ALLOWED_USERS"))
 
     # --- Storage ------------------------------------------------------------
+    # DATA_DIR holds inbox/, reports/ and logs/ unless each is overridden.
+    # On Windows, paths can be local (C:\ACE\logs) or UNC shares (\\RS1619XS\ACE\reports).
     data_dir: Path = field(default_factory=lambda: Path(os.getenv("DATA_DIR", str(ROOT_DIR / "data"))))
+    inbox_override: str = field(default_factory=lambda: os.getenv("INBOX_DIR", ""))
+    reports_override: str = field(default_factory=lambda: os.getenv("REPORTS_DIR", ""))
+    log_override: str = field(default_factory=lambda: os.getenv("LOG_DIR", ""))
+
+    # Named READ-ONLY sources ACE may read client files from, e.g.
+    #   ACE_SOURCES=Clients=\\RS1619XS\Clients;Accounts=\\RS1619XS\Accounts
+    # Separator between sources is ";" (never used in Windows paths).
+    sources_raw: str = field(default_factory=lambda: os.getenv("ACE_SOURCES", ""))
 
     timezone: str = field(default_factory=lambda: os.getenv("TZ", "Asia/Dubai"))
 
     @property
     def inbox_dir(self) -> Path:
-        return self.data_dir / "inbox"
+        return Path(self.inbox_override) if self.inbox_override else self.data_dir / "inbox"
 
     @property
     def reports_dir(self) -> Path:
-        return self.data_dir / "reports"
+        return Path(self.reports_override) if self.reports_override else self.data_dir / "reports"
 
     @property
     def log_dir(self) -> Path:
-        return self.data_dir / "logs"
+        return Path(self.log_override) if self.log_override else self.data_dir / "logs"
+
+    @property
+    def sources(self) -> dict[str, Path]:
+        """Name -> root folder. `inbox` is always available as a source."""
+        out: dict[str, Path] = {}
+        for item in self.sources_raw.split(";"):
+            if "=" not in item:
+                continue
+            name, path = item.split("=", 1)
+            name, path = name.strip(), path.strip().strip('"')
+            if name and path:
+                out[name] = Path(path)
+        out.setdefault("inbox", self.inbox_dir)
+        return out
 
     @property
     def ai_configured(self) -> bool:
@@ -94,7 +118,12 @@ class Settings:
 
     def ensure_dirs(self) -> None:
         for d in (self.inbox_dir, self.reports_dir, self.log_dir):
-            d.mkdir(parents=True, exist_ok=True)
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                # e.g. a read-only or temporarily unreachable network share;
+                # `status` reports it instead of crashing at start-up.
+                pass
 
 
 settings = Settings()

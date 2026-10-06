@@ -18,6 +18,7 @@ os.environ.update({
     "SYNOLOGY_SLASH_TOKEN": "slash-secret",
     "SYNOLOGY_INCOMING_WEBHOOK_URL": "http://nas.test:5000/webapi/entry.cgi?api=SYNO.Chat.External&method=incoming&version=2&token=%22x%22",
     "ALLOWED_USERS": "5,ma",
+    "ACE_SOURCES": f"Clients={TEST_DATA / 'clients'};Missing={TEST_DATA / 'not_mounted'}",
 })
 
 
@@ -30,5 +31,10 @@ def data_dir():
 
     sample = make_sample()
     shutil.copy(sample, TEST_DATA / "inbox" / sample.name)
+    month = TEST_DATA / "clients" / "Mara" / "2026" / "09 Sep"
+    month.mkdir(parents=True)
+    shutil.copy(sample, month / "Mara TB Sep 2026.xlsx")
+    (month / "notes.txt").write_text("not a spreadsheet")
+    (TEST_DATA / "secret.xlsx").write_bytes(b"outside every source")
     yield TEST_DATA
     shutil.rmtree(TEST_DATA, ignore_errors=True)

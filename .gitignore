@@ -21,3 +21,6 @@ venv/
 .DS_Store
 Thumbs.db
 ~$*
+
+# Local logs on the HP server
+/logs/

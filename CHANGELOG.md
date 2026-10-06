@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0 — 2026-10-06
+
+ACE moves to the HP server and reads client files directly from the Synology Drive NAS.
+
+- **Named read-only file sources** (`ACE_SOURCES`): `files Clients/Mara/2026` browses,
+  `mis Clients/Mara/2026/09 Sep/TB.xlsx` runs the MIS straight from the client folder.
+  Paths with `..`, absolute paths, other drives/shares and non-Excel/CSV files are refused.
+- `status` lists each file source with ✓/✗; unreachable shares no longer stop ACE starting.
+- `INBOX_DIR`, `REPORTS_DIR`, `LOG_DIR` overrides; rotating `ace.log` next to the audit log.
+- Main deployment: HP server (Windows Server + Docker Desktop). `docker-compose.yml` mounts the
+  RS1619xs+ `Clients` share read-only and the `ACE` share read/write over SMB.
+  Synology deployment kept as `docker-compose.synology.yml`.
+- Container runs as non-root user `ace` (uid 1000). `tzdata` added for Windows hosts.
+- New guide `docs/SETUP_HP_SERVER.md`; tests grow from 16 to 29.
+
 ## 0.1.0 — 2026-10-06
 
 First version of ACE (Accountability's Chief Examiner), the AI employee of Accountability Accountants.

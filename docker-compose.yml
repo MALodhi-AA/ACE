@@ -1,20 +1,46 @@
-# ACE - Synology Container Manager project
-# Place this repo at /volume1/docker/ace and create a Project pointing to it.
+# ACE - HP server (Windows Server + Docker Desktop, Linux containers)
+#
+#   docker compose up -d --build        start / update
+#   docker compose logs -f ace          follow logs
+#
+# Client files and ACE's own folder live on the Synology RS1619xs+ and are
+# mounted over SMB by Docker itself (mapped drive letters are NOT visible to
+# Docker Desktop). All values come from .env - see .env.example.
+name: ace
+
 services:
   ace:
     build: .
-    image: ace:0.1.0
+    image: ace:0.2.0
     container_name: ace
     restart: unless-stopped
     env_file: .env
-    user: "${PUID:-1026}:${PGID:-100}"
+    environment:
+      DATA_DIR: /data
+      INBOX_DIR: /data/ace/inbox
+      REPORTS_DIR: /data/ace/reports
+      LOG_DIR: /data/logs
+      # Name shown in chat = what users type: `files Clients/Mara`, `mis Clients/...`
+      ACE_SOURCES: "${CLIENTS_SOURCE_NAME:-Clients}=/sources/clients"
     ports:
-      - "8080:8080"
+      - "${ACE_PORT:-8080}:8080"
     volumes:
-      # Synology Drive shared folder: put TB/input files in inbox, reports appear in reports
-      - /volume1/ACE/inbox:/data/inbox:ro
-      - /volume1/ACE/reports:/data/reports
-      - /volume1/ACE/logs:/data/logs
-      # Skills and employee config are mounted so skill updates only need a restart
-      - ./skills:/app/skills:ro
+      - clients:/sources/clients:ro      # READ-ONLY client files (RS1619xs+)
+      - ace_share:/data/ace              # ACE's own folder on RS1619xs+ (inbox + reports)
+      - ./logs:/data/logs                # audit + service logs, local on the HP server
+      - ./skills:/app/skills:ro          # skill changes need only `docker compose restart`
       - ./config:/app/config:ro
+
+volumes:
+  clients:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: "//${NAS_IP}/${CLIENTS_SHARE}"
+      o: "username=${NAS_USER},password=${NAS_PASSWORD},vers=3.0,ro,uid=1000,gid=1000,file_mode=0444,dir_mode=0555"
+  ace_share:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: "//${NAS_IP}/${ACE_SHARE}"
+      o: "username=${NAS_USER},password=${NAS_PASSWORD},vers=3.0,rw,uid=1000,gid=1000,file_mode=0664,dir_mode=0775"

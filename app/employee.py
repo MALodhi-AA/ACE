@@ -20,6 +20,7 @@ import yaml
 
 from app.audit import audit
 from app.config import ROOT_DIR, settings
+from app.files import FileAccessError, list_folder
 from app.llm import llm
 from skills.registry import SKILLS, by_command
 
@@ -104,6 +105,9 @@ def status_text(check_ai: bool = True) -> str:
         else:
             ok, note = False, ""
         lines.append(f"{sysdef['label']} {_tick(ok)}{note}")
+    lines += ["", "File sources (read-only):"]
+    for name, root in settings.sources.items():
+        lines.append(f"{name} {_tick(root.exists())}")
     if not settings.allowed_users:
         lines += ["", "⚠️ ALLOWED_USERS is empty - anyone in Chat can use me."]
     return "\n".join(lines)
@@ -117,7 +121,7 @@ def help_text() -> str:
         "status - who I am, my skills and connected systems",
         "skills - skill details and versions",
         "ask <question> - ask me a finance/accounting question",
-        "files - list files waiting in my inbox",
+        "files [folder] - browse my read-only file sources, e.g. files Clients/Mara",
     ]
     for s in SKILLS.values():
         lines.append(f"{s.usage} - {s.name}")
@@ -139,18 +143,11 @@ def skills_text() -> str:
     return "\n".join(out)
 
 
-def files_text() -> str:
-    inbox = settings.inbox_dir
-    files = sorted(
-        (f for f in inbox.glob("*") if f.is_file() and not f.name.startswith((".", "~$"))),
-        key=lambda f: f.stat().st_mtime, reverse=True,
-    ) if inbox.exists() else []
-    if not files:
-        return "Inbox is empty. Save the TB/MIS input file into the ACE › inbox folder on Synology Drive."
-    lines = [f"Inbox ({len(files)} files, newest first):"]
-    for f in files[:20]:
-        lines.append(f"- {f.name}  ({f.stat().st_size/1024:,.0f} KB, {datetime.fromtimestamp(f.stat().st_mtime):%d-%b %H:%M})")
-    return "\n".join(lines)
+def files_text(ref: str = "") -> str:
+    try:
+        return list_folder(ref)
+    except FileAccessError as exc:
+        return f"⚠️ {exc}"
 
 
 def ask(user_key: str, question: str) -> str:
@@ -194,8 +191,8 @@ def handle(user_id: str, username: str, text: str, channel: str) -> Response:
         return Response("Checking my systems…", background=lambda: status_text())
     if cmd == "skills":
         return Response(skills_text())
-    if cmd in ("files", "inbox"):
-        return Response(files_text())
+    if cmd in ("files", "inbox", "ls"):
+        return Response(files_text(arg))
     if cmd == "whoami":
         return Response(f"user_id: {user_id}\nusername: {username}\nauthorised: yes")
     if cmd == "reset":

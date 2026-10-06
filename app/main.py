@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+from logging.handlers import RotatingFileHandler
 
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -18,10 +19,17 @@ from app.config import settings
 from app.employee import PROFILE, Response, handle
 from integrations.synology_chat import client as chat
 
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-log = logging.getLogger("ace")
-
 settings.ensure_dirs()
+
+_handlers: list[logging.Handler] = [logging.StreamHandler()]
+try:
+    _handlers.append(RotatingFileHandler(settings.log_dir / "ace.log", maxBytes=5_000_000, backupCount=5,
+                                         encoding="utf-8"))
+except OSError:
+    pass  # log folder not writable: console/Docker logs only
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), handlers=_handlers,
+                    format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("ace")
 app = FastAPI(title=PROFILE["name"], version=PROFILE["version"])
 
 

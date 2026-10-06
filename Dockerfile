@@ -9,6 +9,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata curl \
     && rm -rf /var/lib/apt/lists/*
 
+RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin ace
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -17,6 +19,9 @@ COPY integrations ./integrations
 COPY skills ./skills
 COPY config ./config
 COPY templates ./templates
+
+RUN mkdir -p /data/logs /data/ace && chown -R ace:ace /data
+USER ace
 
 EXPOSE 8080
 HEALTHCHECK --interval=60s --timeout=5s --retries=3 CMD curl -fs http://localhost:8080/health || exit 1

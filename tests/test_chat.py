@@ -123,3 +123,14 @@ def test_name_prefixes():
     assert parse("/ai mis sample") == ("mis", "sample")
     assert parse("Acer laptop advice?")[0] == "acer"       # words starting with ACE are not eaten
     assert parse("/ace status") == ("status", "")
+
+
+def test_files_and_mis_from_source_via_chat(client, sent):
+    bot(client, "files Clients/Mara/2026")
+    assert "09 Sep/" in sent[-1]["payload"]["text"]
+    bot(client, "mis Clients/Mara/2026/09 Sep/Mara TB Sep 2026.xlsx")
+    assert "MIS completed" in sent[-1]["payload"]["text"]
+    bot(client, "mis ../secret.xlsx")
+    assert "not allowed" in sent[-1]["payload"]["text"]
+    bot(client, "status")
+    assert "File sources (read-only):" in sent[-1]["payload"]["text"] and "Clients ✓" in sent[-1]["payload"]["text"]

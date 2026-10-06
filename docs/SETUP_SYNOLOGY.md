@@ -1,4 +1,9 @@
-# Setting up ACE on the Synology NAS
+# Alternative: running ACE on a Synology NAS
+
+> The main deployment is the HP server - see [SETUP_HP_SERVER.md](SETUP_HP_SERVER.md).
+> Use this guide only if ACE should run on a Synology instead, with
+> `docker compose -f docker-compose.synology.yml up -d --build` (or a Container Manager
+> project pointing at that file).
 
 Time needed: about 45–60 minutes the first time.
 

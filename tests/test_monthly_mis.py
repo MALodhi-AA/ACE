@@ -4,7 +4,7 @@ import yaml
 from openpyxl import load_workbook
 
 from skills.monthly_mis.engine import MISInputError, analyse, load_input
-from skills.monthly_mis.skill import MAPPING_PATH, SKILL_DIR, resolve_inbox_file, run
+from skills.monthly_mis.skill import MAPPING_PATH, SKILL_DIR, run
 
 CFG = yaml.safe_load((SKILL_DIR / "skill.yaml").read_text())
 
@@ -71,8 +71,12 @@ def test_run_writes_versioned_report(data_dir):
     assert "MIS completed" in r1.chat_summary
 
 
-def test_inbox_path_traversal_blocked(data_dir):
-    with pytest.raises(MISInputError):
-        resolve_inbox_file("../../etc/passwd", data_dir / "inbox")
+def test_missing_file_reported(data_dir):
     r = run("does_not_exist.xlsx", use_ai=False)
     assert not r.ok and "No file" in r.chat_summary
+
+
+def test_mis_from_client_source(data_dir):
+    r = run("Clients/Mara/2026/09 Sep/mara tb", requested_by="test", use_ai=False)
+    assert r.ok, r.chat_summary
+    assert r.details["source"] == "Clients/Mara/2026/09 Sep/Mara TB Sep 2026.xlsx"
