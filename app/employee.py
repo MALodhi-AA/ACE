@@ -139,6 +139,16 @@ def help_text() -> str:
     for s in SKILLS.values():
         lines.append(f"{s.usage} - {s.name}")
     lines += [
+        "",
+        f"For {MANAGER} - tasks for the team (just write in plain words):",
+        "  ask Ali to send the Mara VAT working by Thursday, follow up daily",
+        "  tell Amir privately to call the bank when he checks in",
+        "  I show you what I understood; reply OK to send, a correction, or cancel.",
+        "  tasks - open tasks | task T-12 - details | remind / close / cancel / pause / resume T-12",
+        "  approve T-12 / reject T-12 - extension requests | digest - today's summary now",
+        "Staff: reply 'done', ask for more time, say what is blocking you, or",
+        f"  'tell {MANAGER} ...' to pass a message.",
+        "",
         f"collect files [channel] [period] - {MANAGER} only: save old files shared in a channel",
         "  (incl. threads) into year/month/day folders, e.g. collect files for Oct 2026,",
         "  collect files ACE-TEST from 1 Sep 2026 to 30 Sep 2026, collect files last month",

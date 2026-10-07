@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.0 - 2026-10-07
+Tasks and follow-ups - ACE as Sir Muhammad Ali's assistant.
+- Instructions in plain words from Sir Muhammad Ali (ACE_ADMINS only), in his direct chat
+  with ACE or with @ACE in a channel: "ask Ali to send the Mara VAT working by Thursday,
+  follow up daily". ACE shows what it understood (task, person, private/channel, due
+  date, follow-up, escalation, the exact message) and waits for OK / a correction / cancel.
+- Delivery privately (needs one message from the person to ACE first) or in a channel
+  (replies in the message's thread are read as replies to the task).
+- Follow-ups on schedule within working hours (WORK_DAYS / WORK_START / WORK_END):
+  default = on the due date at 10:00 then daily; or daily at a time, every N hours, none.
+  "when he checks in" waits for working hours until attendance is connected (v0.6).
+- Staff replies are understood: done (task closed, Sir Muhammad Ali informed), more time
+  (he approves/rejects with `approve T-n` / `reject T-n`), blocked (he is told), update
+  (noted), "tell Sir Muhammad Ali ..." (passed on). Other questions are answered as before.
+- Overdue tasks and "tell me if not done by ..." are reported to him; morning digest on
+  working days at DIGEST_TIME (due today, overdue, approvals waiting, blocked, completed,
+  files saved); `digest` any time.
+- Commands for him: tasks, task T-n, remind / close / cancel / pause / resume T-n.
+- Task register in state/ace.db (SQLite) with a full history per task.
+
 ## 0.4.11 - 2026-10-07
 - Titles for colleagues: `config/employee.yaml` now has a `titles:` list. ACE always
   writes "Sir Amir Hussain" (and "Sir Muhammad Ali"), in AI answers and in its own

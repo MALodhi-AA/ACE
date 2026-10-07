@@ -223,6 +223,13 @@ class ChannelWatcher:
         self._saved: dict[int, set[int]] = {}       # channel -> post ids already saved
         self._channels: list[dict] = []
         self._collecting = threading.Lock()
+        self.assistant = None
+        if settings.tasks_enabled:
+            from app.assistant import Assistant
+            try:
+                self.assistant = Assistant(self)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("task assistant not available: %s", exc)
         me = settings.chat_user_id or self.state.get("_me", {}).get("id")
         if me and getattr(self.chat, "me", None) is None:
             self.chat.me = int(me)
@@ -419,7 +426,9 @@ class ChannelWatcher:
             return True, 0                       # ACE's own posts
         fp = post.get("file_props")
         if post.get("type") != "file" or not fp:
-            if post.get("message") and (kind(ch) == "direct" or mentions(post, me)):
+            on_task = bool(self.assistant and post.get("thread_id")
+                           and self.assistant.store.by_post(post["thread_id"]))
+            if post.get("message") and (kind(ch) == "direct" or mentions(post, me) or on_task):
                 self._converse(ch, post)
             return True, 0
         pid = post["post_id"]
@@ -645,6 +654,19 @@ class ChannelWatcher:
         self._pool.submit(run)
 
     # --- conversation ---------------------------------------------------------------
+    def _mentions(self, post: dict) -> tuple[dict[str, str], str]:
+        """Other people @mentioned in a message ({user id: name}) and the text with their names."""
+        me = getattr(self.chat, "me", None)
+        names: dict[str, str] = {}
+        raw = post.get("message") or ""
+        for m in re.findall(r"@u:(\d+)", raw):
+            if me is not None and int(m) == me:
+                continue
+            names[m] = self.username(m) or f"user {m}"
+        rich = re.sub(r"@u:(\d+)", lambda m: "" if me is not None and int(m.group(1)) == me
+                      else f"@{names.get(m.group(1), m.group(1))}", raw)
+        return names, _ACE_NAME.sub("", rich).strip()
+
     def _converse(self, ch: dict, post: dict) -> None:
         """Answer a direct message or an @ACE mention, like the bot does."""
         from app.employee import handle   # late import: employee imports this module for status
@@ -655,6 +677,10 @@ class ChannelWatcher:
         where = "chat-direct" if kind(ch) == "direct" else f"chat-{kind(ch)}:{self.folder_name(ch)}"
         thread = post.get("thread_id") or None
         self.stats["answered_today"] += 1
+        if self.assistant is not None and parse_collect(text) is None:
+            mentions, rich = self._mentions(post)
+            if self.assistant.on_message(ch, post, rich, mentions, kind(ch) == "direct", thread):
+                return
         try:
             cmd = parse_collect(text, datetime.now(self.tz).date())
         except ValueError as exc:
@@ -687,13 +713,52 @@ class ChannelWatcher:
 
             self._pool.submit(run)
 
-    def say(self, cid: int, text: str, thread_id: int | None = None) -> None:
+    def say(self, cid: int, text: str, thread_id: int | None = None) -> int:
+        """Post (in parts if long). Returns the id of the first part, 0 if nothing was posted."""
+        first = 0
         for part in chunk_text(plain(text)):
             try:
-                self.chat.send(cid, part, thread_id=thread_id)
+                pid = self.chat.send(cid, part, thread_id=thread_id)
             except Exception as exc:  # noqa: BLE001
                 log.warning("message to channel %s failed: %s", cid, exc)
-                return
+                return first
+            first = first or int(pid or 0)
+        return first
+
+    post = say
+
+    # --- what the assistant needs to know ------------------------------------------
+    def channel_names(self) -> list[str]:
+        return [self.folder_name(c) for c in self._channels if kind(c) != "direct"]
+
+    def directory(self) -> dict[int, str]:
+        """Chat users ACE knows: user id -> user name (refreshed every 10 minutes)."""
+        import time as _t
+        if _t.monotonic() - getattr(self, "_users_at", 0) > 600:
+            try:
+                self._users = self.chat.users() or self._users
+            except Exception:  # noqa: BLE001
+                pass
+            self._users_at = _t.monotonic()
+        me = getattr(self.chat, "me", None)
+        return {u: n for u, n in self._users.items() if n and u != me}
+
+    def files_saved_since(self, since: datetime) -> int | None:
+        path = settings.log_dir / "audit.jsonl"
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()[-20000:]
+        except OSError:
+            return None
+        cutoff = since.astimezone(ZoneInfo("UTC")).isoformat(timespec="seconds")
+        n = 0
+        for line in lines:
+            if '"channel_file_saved"' in line:
+                try:
+                    if json.loads(line).get("ts", "") >= cutoff:
+                        n += 1
+                except ValueError:
+                    pass
+        return n
 
     def _reply(self, cid: int, pid: int, text: str) -> None:
         if not settings.chat_reply_on_save:
@@ -710,6 +775,8 @@ class ChannelWatcher:
         while not self._stop.is_set():
             try:
                 self.poll_once()
+                if self.assistant is not None:
+                    self.assistant.tick()
                 self.stats["last_error"] = self.stats["last_error"] if self.attempts else ""
                 backoff = settings.chat_poll_seconds
             except Exception as exc:  # noqa: BLE001
@@ -755,4 +822,9 @@ def status_line() -> str | None:
             f"last check {s['last_check']:%H:%M}")
     if s["last_error"]:
         line += f" ({s['last_error']})"
+    if w.assistant is not None:
+        try:
+            line += "\n" + w.assistant.status_line()
+        except Exception:  # noqa: BLE001
+            pass
     return line

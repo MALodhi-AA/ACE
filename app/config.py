@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import time
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -35,6 +36,26 @@ def _bool(name: str, default: bool) -> bool:
     if val is None or val == "":
         return default
     return val.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _hhmm(value: str) -> time:
+    try:
+        h, m = (int(x) for x in value.strip().split(":"))
+        return time(h, m)
+    except ValueError:
+        return time(9, 0)
+
+
+def _days(value: str) -> list[int]:
+    """'0-4' or '0,1,2,3,4' (0 = Monday)."""
+    out: set[int] = set()
+    for part in value.replace(" ", "").split(","):
+        if "-" in part:
+            a, b = part.split("-", 1)
+            out.update(range(int(a), int(b) + 1))
+        elif part.isdigit():
+            out.add(int(part))
+    return sorted(d for d in out if 0 <= d <= 6) or [0, 1, 2, 3, 4]
 
 
 def _list(name: str) -> list[str]:
@@ -113,6 +134,14 @@ class Settings:
     state_override: str = field(default_factory=lambda: os.getenv("STATE_DIR", ""))
 
     timezone: str = field(default_factory=lambda: os.getenv("TZ", "Asia/Dubai"))
+
+    # --- Tasks and follow-ups (v0.5) -------------------------------------------
+    # Working days (0=Mon ... 6=Sun) and hours for follow-ups; the morning digest time.
+    work_days: list[int] = field(default_factory=lambda: _days(os.getenv("WORK_DAYS", "0-4")))
+    work_start: time = field(default_factory=lambda: _hhmm(os.getenv("WORK_START", "09:00")))
+    work_end: time = field(default_factory=lambda: _hhmm(os.getenv("WORK_END", "18:00")))
+    digest_time: time = field(default_factory=lambda: _hhmm(os.getenv("DIGEST_TIME", "08:45")))
+    tasks_enabled: bool = field(default_factory=lambda: _bool("TASKS_ENABLED", True))
 
     @property
     def chat_user_configured(self) -> bool:

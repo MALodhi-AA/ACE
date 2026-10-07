@@ -200,8 +200,9 @@ class ChatUser:
             time.sleep(1.5 * (attempt + 1))
         return res
 
-    def send(self, channel_id: int, text: str, thread_id: int | None = None) -> bool:
-        """Post a plain-text message (as a thread reply when possible)."""
+    def send(self, channel_id: int, text: str, thread_id: int | None = None) -> int:
+        """Post a plain-text message (as a thread reply when possible).
+        Returns the new post id (truthy) or 0 if it could not be posted."""
         res = {}
         if thread_id:
             res = self._create(channel_id=channel_id, message=text, thread_id=thread_id)
@@ -210,10 +211,10 @@ class ChatUser:
         if not res.get("success"):
             log.warning("Chat post failed: %s", res.get("error"))
             return False
-        creator = (res.get("data") or {}).get("creator_id")
-        if creator:
-            self.me = int(creator)
-        return True
+        data = res.get("data") or {}
+        if data.get("creator_id"):
+            self.me = int(data["creator_id"])
+        return int(data.get("post_id") or 1)
 
     def users(self) -> dict[int, str]:
         """Chat user id -> user name (best effort; empty if the call is not available)."""

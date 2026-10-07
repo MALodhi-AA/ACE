@@ -478,7 +478,7 @@ def test_send_waits_when_chat_says_too_fast(monkeypatch):
         return httpx.Response(200, json={"success": True, "data": {"creator_id": 189}})
 
     c = _client(handler)
-    assert c.send(CID, "Done") is True and tries["n"] == 3 and c.me == 189
+    assert c.send(CID, "Done") and tries["n"] == 3 and c.me == 189
 
 
 def test_empty_chat_does_not_block_other_chats(tmp_path):

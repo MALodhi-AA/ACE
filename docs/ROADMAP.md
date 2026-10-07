@@ -12,8 +12,9 @@ any action.
 | 4 | First skill: Monthly MIS v1.0 | ✅ v0.1 |
 | 4b | Runs on the HP server; NAS access like an employee (own `ace` account, per-client share permissions) | ✅ v0.3 |
 | 4c | ACE as a channel member: own Chat account, saves files shared in its channels | ✅ v0.4 |
-| 4d | Answers @ACE in channels; task assignments, reminders, daily digest to MA | ⏭ v0.5 |
-| 4e | Monitoring: weekly staff summary, unanswered client queries, overdue items | planned v0.6 |
+| 4d | Tasks from Sir Muhammad Ali's instructions, follow-ups, staff replies, digest | ✅ v0.5 |
+| 4e | Attendance DB (read-only, MariaDB on DS723+): check-in delivery, hours, absences | ⏭ v0.6 |
+| 4f | Standing instructions, compliance calendar (VAT/CT), weekly staff summary | planned v0.7 |
 | 5 | Train MIS on real historical TBs without Tally (v1.1, v1.2 …) | ⏭ next |
 | 6 | Tally connector, 100 % read-only (TB, P&L, BS, ledgers, vouchers, cost centres) | planned |
 | 7 | Task engine: AI tasks + human tasks via the existing task bot; recheck on `/task done` | planned |

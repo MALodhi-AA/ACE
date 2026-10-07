@@ -142,6 +142,20 @@ files, set `ACE_ADMINS=<your user_id>` in `.env` and tell ACE, e.g.
 from a channel, or list it in `CHAT_IGNORE_CHANNELS`, to stop it saving there.
 Tell staff that ACE saves files shared in the channels it is in.
 
+## 8. Tasks and follow-ups (v0.5)
+
+1. `.env`: `ACE_ADMINS=<Sir Muhammad Ali's user_id>`; working hours `WORK_DAYS=0-4`,
+   `WORK_START=09:00`, `WORK_END=18:00`; `DIGEST_TIME=08:45`.
+2. Sir Muhammad Ali sends ACE any direct message once (so ACE can reach him privately).
+   Each staff member who should get private instructions sends ACE "hi" once.
+3. Instruction example (direct chat with ACE): `ask Ali to send the Mara Q3 VAT working by
+   Thursday, follow up daily, tell me if not done by Wednesday 6pm` -> ACE shows the draft ->
+   `OK`.
+4. `status` shows `Tasks: N open, M overdue; digest 08:45 ✓; staff list: N people`.
+   If the staff list is 0, @mention people in instructions (`ask @Ali to ...`).
+
+Tasks are stored in `state/ace.db` (back it up with the rest of `D:\ACE\app\state`).
+
 ## Keeping it running after a reboot
 
 Docker Desktop is a desktop app: containers only start once Docker Desktop is running,
