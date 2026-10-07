@@ -138,8 +138,9 @@ def help_text() -> str:
     for s in SKILLS.values():
         lines.append(f"{s.usage} - {s.name}")
     lines += [
-        "collect files [channel] [from YYYY-MM-DD] [to YYYY-MM-DD] - manager only: save old files",
-        "  shared in a channel (incl. threads) into year/month/day folders",
+        "collect files [channel] [period] - manager only: save old files shared in a channel",
+        "  (incl. threads) into year/month/day folders, e.g. collect files for Oct 2026,",
+        "  collect files ACE-TEST from 1 Sep 2026 to 30 Sep 2026, collect files last month",
         "whoami - show your Chat user id (for permissions)",
         "reset - clear our conversation memory",
         "",

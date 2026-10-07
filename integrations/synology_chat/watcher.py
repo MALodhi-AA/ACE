@@ -49,41 +49,122 @@ _MENTION_TOKEN = re.compile(r"@u:\d+\s*")
 _ACE_NAME = re.compile(r"^\s*@?ace\b[:,]?\s*", re.IGNORECASE)
 
 
-_COLLECT = re.compile(r"^collect\s+(?:old\s+)?files?\b(.*)$", re.IGNORECASE | re.DOTALL)
-_DATE = r"(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{4})"
+_COLLECT = re.compile(r"^(?:please\s+)?(?:collect|save|fetch|download)\s+(?:all\s+)?(?:the\s+)?(?:old\s+)?files?\b(.*)$",
+                      re.IGNORECASE | re.DOTALL)
+_MONTHS = {m: i for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
+_MON = r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+_DATE_PATTERNS = [
+    (re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b"), "ymd"),
+    (re.compile(r"\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})\b"), "dmy"),
+    (re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?{_MON}\.?,?\s+(\d{{4}})\b", re.I), "d_mon_y"),
+    (re.compile(rf"\b{_MON}\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?,?\s+(\d{{4}})\b", re.I), "mon_d_y"),
+]
+_MONTH_YEAR = [re.compile(rf"\b{_MON}\.?,?\s+(\d{{4}})\b", re.I), re.compile(r"\b(\d{4})-(\d{1,2})\b(?!-)"),
+               re.compile(r"\b(\d{1,2})/(\d{4})\b")]
+
+
+def _mon(name: str) -> int:
+    return _MONTHS[name.lower()[:3]]
 
 
 def parse_date(text: str):
+    """One date in any common form (2026-09-01, 01/09/2026, 1 Sep 2026, Sep 1 2026); None if not a date."""
     from datetime import date
-    text = text.strip()
-    try:
-        if re.match(r"^\d{4}-", text):
-            y, m, d = (int(x) for x in text.split("-"))
-        else:
-            d, m, y = (int(x) for x in re.split(r"[/-]", text))
-        return date(y, m, d)
-    except ValueError:
-        return None
+    for rx, form in _DATE_PATTERNS:
+        m = rx.search(text)
+        if not m:
+            continue
+        g = m.groups()
+        try:
+            if form == "ymd":
+                return date(int(g[0]), int(g[1]), int(g[2]))
+            if form == "dmy":
+                return date(int(g[2]), int(g[1]), int(g[0]))
+            if form == "d_mon_y":
+                return date(int(g[2]), _mon(g[1]), int(g[0]))
+            return date(int(g[2]), _mon(g[0]), int(g[1]))
+        except ValueError:
+            return None
+    return None
 
 
-def parse_collect(text: str) -> dict | None:
-    """'collect files [<channel>] [from <date>] [to <date>]' -> {'channel', 'from', 'to'}; None if not a collect command.
-    Raises ValueError for a bad date."""
+def _month_span(year: int, month: int):
+    from calendar import monthrange
+    from datetime import date
+    return date(year, month, 1), date(year, month, monthrange(year, month)[1])
+
+
+def parse_period(text: str, today=None):
+    """Find a period in free text -> (from, to, rest_of_text). Raises ValueError for an impossible date."""
+    from datetime import date, timedelta
+    today = today or date.today()
+    rest = " " + text + " "
+    found = []                                   # (position, date, keyword-before)
+    for rx, _form in _DATE_PATTERNS:
+        for m in list(rx.finditer(rest)):
+            d = parse_date(m.group(0))
+            if d is None:
+                raise ValueError(f"I couldn't read the date '{m.group(0).strip()}'. Try e.g. 2026-09-01 or 1 Sep 2026.")
+            before = rest[max(0, m.start() - 12):m.start()].lower()
+            found.append((m.start(), d, before))
+            rest = rest[:m.start()] + " " * (m.end() - m.start()) + rest[m.end():]
+    found.sort()
+    if len(found) >= 2:
+        lo, hi = found[0][1], found[-1][1]
+        return min(lo, hi), max(lo, hi), rest
+    if len(found) == 1:
+        _, d, before = found[0]
+        if re.search(r"\b(from|since|after)\s*$", before):
+            return d, None, rest
+        if re.search(r"\b(to|until|till|up\s+to|before)\s*$", before):
+            return None, d, rest
+        return d, d, rest                        # a single day ("on 5 Oct 2026")
+    for rx in _MONTH_YEAR:                       # whole month: "Oct 2026", "2026-10", "10/2026"
+        m = rx.search(rest)
+        if m:
+            g = m.groups()
+            try:
+                if rx is _MONTH_YEAR[0]:
+                    y, mo = int(g[1]), _mon(g[0])
+                elif rx is _MONTH_YEAR[1]:
+                    y, mo = int(g[0]), int(g[1])
+                else:
+                    y, mo = int(g[1]), int(g[0])
+                lo, hi = _month_span(y, mo)
+            except (ValueError, KeyError):
+                continue
+            return lo, hi, rest[:m.start()] + " " + rest[m.end():]
+    low = rest.lower()
+    if "yesterday" in low:
+        d = today - timedelta(days=1)
+        return d, d, low.replace("yesterday", " ")
+    if "today" in low:
+        return today, today, low.replace("today", " ")
+    if "last month" in low or "previous month" in low:
+        first = today.replace(day=1) - timedelta(days=1)
+        lo, hi = _month_span(first.year, first.month)
+        return lo, hi, re.sub(r"(last|previous) month", " ", low)
+    if "this month" in low:
+        return today.replace(day=1), today, low.replace("this month", " ")
+    if "this year" in low:
+        return date(today.year, 1, 1), today, low.replace("this year", " ")
+    return None, None, rest
+
+
+def parse_collect(text: str, today=None) -> dict | None:
+    """'collect files ...' in plain words -> {'text': words left (may name a channel), 'from', 'to'}.
+    None if the message is not a collect instruction. Raises ValueError for a bad date."""
     m = _COLLECT.match(text.strip())
     if not m:
         return None
-    rest = m.group(1)
-    out = {"channel": "", "from": None, "to": None}
-    for key in ("from", "to"):
-        dm = re.search(rf"\b{key}\s+{_DATE}", rest, re.IGNORECASE)
-        if dm:
-            d = parse_date(dm.group(1))
-            if d is None:
-                raise ValueError(f"I couldn't read the date '{dm.group(1)}'. Use YYYY-MM-DD, e.g. 2026-09-01.")
-            out[key] = d
-            rest = rest.replace(dm.group(0), " ")
-    out["channel"] = re.sub(r"^\s*(?:in|from|of)\s+", "", rest).strip().strip('"').strip()
-    return out
+    lo, hi, rest = parse_period(m.group(1), today)
+    quoted = re.findall(r"[\"'“”‘’]([^\"'“”‘’]{2,})[\"'“”‘’]", m.group(1))
+    return {"text": rest, "quoted": quoted[0].strip() if quoted else "", "from": lo, "to": hi}
+
+
+def _norm(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
 
 
 def day_folder(create_at_ms: int, tz) -> list[str]:
@@ -401,11 +482,26 @@ class ChannelWatcher:
         return any(a.lower() in {uid.lower(), self.username(uid).lower()} for a in settings.ace_admins)
 
     def find_channel(self, name: str) -> dict | None:
-        want = name.strip().lower()
+        """Match a channel name loosely: case, spaces, dashes and dots don't matter."""
+        want = _norm(name)
+        if not want:
+            return None
         for ch in self._channels:
-            if want in {str(ch.get("channel_id")), str(ch.get("name") or "").lower(), self.folder_name(ch).lower()}:
+            if want in {str(ch.get("channel_id")), _norm(ch.get("name") or ""), _norm(self.folder_name(ch))}:
                 return ch
         return None
+
+    def channel_in_text(self, text: str) -> dict | None:
+        """The channel whose name appears in a sentence (longest match wins)."""
+        flat = _norm(text)
+        best = None
+        for ch in self._channels:
+            if kind(ch) == "direct":
+                continue
+            for n in {_norm(ch.get("name") or ""), _norm(self.folder_name(ch))}:
+                if len(n) >= 4 and n in flat and (best is None or len(n) > best[0]):
+                    best = (len(n), ch)
+        return best[1] if best else None
 
     def collect(self, ch: dict, start=None, end=None) -> dict:
         """Save every file shared in a channel (main messages and thread replies) between two dates."""
@@ -474,16 +570,18 @@ class ChannelWatcher:
             audit("denied", command="collect files", user_id=uid)
             self.say(cid, "Only my manager can ask me to collect old files.", thread)
             return
-        target = ch_here
-        if cmd["channel"]:
-            target = self.find_channel(cmd["channel"])
-            if not target:
-                names = ", ".join(sorted(self.folder_name(c) for c in self._channels if kind(c) != "direct"))
-                self.say(cid, f"I'm not in a channel called '{cmd['channel']}'. I'm in: {names}", thread)
+        target = self.find_channel(cmd["quoted"]) if cmd["quoted"] else None
+        target = target or self.channel_in_text(cmd["text"]) or (self.channel_in_text(cmd["quoted"]) if cmd["quoted"] else None)
+        if target is None:
+            if cmd["quoted"] or kind(ch_here) == "direct":
+                import difflib
+                names = sorted(self.folder_name(c) for c in self._channels if kind(c) != "direct")
+                guess = difflib.get_close_matches(cmd["quoted"] or cmd["text"].strip(), names, n=1, cutoff=0.5)
+                hint = f" Did you mean {guess[0]}?" if guess else ""
+                what = f"'{cmd['quoted']}'" if cmd["quoted"] else "that"
+                self.say(cid, f"I'm not in a channel called {what}.{hint} I'm in: {', '.join(names)}", thread)
                 return
-        elif kind(ch_here) == "direct":
-            self.say(cid, "Which channel? e.g. collect files ACE-TEST from 2026-09-01 to 2026-09-30", thread)
-            return
+            target = ch_here
         span = (f" from {cmd['from']:%d-%b-%Y}" if cmd["from"] else "") + (f" to {cmd['to']:%d-%b-%Y}" if cmd["to"] else "")
         if not self._collecting.acquire(blocking=False):
             self.say(cid, "I'm already collecting files - I'll finish that first.", thread)
@@ -529,7 +627,7 @@ class ChannelWatcher:
         thread = post.get("thread_id") or None
         self.stats["answered_today"] += 1
         try:
-            cmd = parse_collect(text)
+            cmd = parse_collect(text, datetime.now(self.tz).date())
         except ValueError as exc:
             self.say(cid, str(exc), thread)
             return

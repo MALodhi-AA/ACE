@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.6 - 2026-10-07
+- `collect files` understands plain words: "collect files from "PaymentTracker-MaraGroup"
+  for the month of Oct 2026", "... last month", "... on 5 October 2026",
+  "... from 1st Sep 2026 to 30/09/2026", "save all files of <channel> for September 2026".
+- Channel names match loosely (case, spaces, dashes and dots are ignored) and an unknown
+  name gets a "Did you mean ...?" suggestion.
+
 ## 0.4.5 - 2026-10-07
 - Shared files are now saved in day folders:
   `ACE/channel-files/<Channel>/<YYYY>/<YYYY-MM>/<YYYY-MM-DD>/<file>`.

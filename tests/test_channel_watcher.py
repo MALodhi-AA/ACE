@@ -342,13 +342,21 @@ class HistoryChat(ThreadChat):
 
 
 def test_parse_collect():
+    today = date(2026, 10, 7)
     assert parse_collect("whoami") is None
-    c = parse_collect("collect files from 2026-09-01 to 30/09/2026")
-    assert c == {"channel": "", "from": date(2026, 9, 1), "to": date(2026, 9, 30)}
-    c = parse_collect("Collect files ACE-TEST from 2026-09-01")
-    assert c["channel"] == "ACE-TEST" and c["from"] == date(2026, 9, 1) and c["to"] is None
+    c = parse_collect("collect files from 2026-09-01 to 30/09/2026", today)
+    assert (c["from"], c["to"]) == (date(2026, 9, 1), date(2026, 9, 30))
+    c = parse_collect('collect files from "Payment-Tracker-MaraGroup" for the month of Oct 2026.', today)
+    assert c["quoted"] == "Payment-Tracker-MaraGroup"
+    assert (c["from"], c["to"]) == (date(2026, 10, 1), date(2026, 10, 31))
+    c = parse_collect("Collect files ACE-TEST from 1st Sep 2026", today)
+    assert "ACE-TEST" in c["text"] and c["from"] == date(2026, 9, 1) and c["to"] is None
+    assert parse_collect("collect files last month", today)["from"] == date(2026, 9, 1)
+    c = parse_collect("save all files on 5 October 2026", today)
+    assert c["from"] == c["to"] == date(2026, 10, 5)
+    assert parse_collect("collect files until 2026-09-30", today)["to"] == date(2026, 9, 30)
     with pytest.raises(ValueError):
-        parse_collect("collect files from 2026-13-45")
+        parse_collect("collect files from 2026-13-45", today)
 
 
 @pytest.fixture
@@ -376,6 +384,7 @@ def files_under(root):
 
 def test_collect_by_date_with_threads_in_day_folders(history):
     chat, w, root = history
+    assert w.find_channel("ace test") is w.find_channel("Ace-Test") is not None      # loose match
     r = w.collect(w.find_channel("ace-test"), date(2026, 9, 1), date(2026, 9, 30))
     assert r["saved"] == 3
     assert files_under(root) == ["2026/2026-09/2026-09-01/sep1.pdf",
@@ -402,3 +411,18 @@ def test_collect_needs_admin(history, monkeypatch):
     w.poll_once()
     assert "Only my manager" in chat.sent[-1][2]
     assert not root.exists()
+
+
+def test_collect_natural_language_with_quoted_channel_name(history):
+    chat, w, root = history
+    chat.new(msg(DM, 2, 'collect files from "Ace Test" for the month of Sep 2026.'))
+    w.poll_once()
+    w._pool.shutdown(wait=True)
+    assert chat.sent[-1][2].startswith("Done: 3 files collected from ACE-TEST from 01-Sep-2026 to 30-Sep-2026")
+
+
+def test_collect_unknown_channel_suggests_a_name(history):
+    chat, w, root = history
+    chat.new(msg(DM, 2, 'collect files from "ACE-TST"'))
+    w.poll_once()
+    assert "Did you mean ACE-TEST?" in chat.sent[-1][2]
