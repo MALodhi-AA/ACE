@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.1 - 2026-10-07
+Fix: ACE stopped saving files in a channel after a message was deleted.
+- Chat answers "post not found" (402) for any request anchored on a deleted message. If the
+  last message ACE had seen was deleted, every later check of that channel failed (log:
+  "post list failed (error 402)" every few seconds) and new files were not saved.
+- ACE now steps back to the nearest message that still exists and carries on from there,
+  so nothing after it is missed. Thread scans use the same fallback.
+- Finding the newest message tolerates deleted messages at the end of a channel.
+- After updating, ACE catches up on the files it missed automatically.
+
 ## 0.7.0 - 2026-10-07
 ACE's brain: any wording, AI only when needed, and learning.
 - Messages from Sir Muhammad Ali go down a ladder and stop at the first step that can

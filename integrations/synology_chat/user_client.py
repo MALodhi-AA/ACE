@@ -148,12 +148,16 @@ class ChatUser:
     def _exists_up_to(self, channel_id: int, n: int) -> list[dict] | None:
         """Posts around message number n, or None when n is past the channel's last message
         (Chat answers 'post not found' then). Missing numbers inside the range are fine."""
-        try:
-            return self.posts(channel_id, (channel_id << 32) + n, prev_count=3, next_count=3)
-        except ChatError as exc:
-            if exc.code == 402:
-                return None
-            raise
+        # A deleted message also answers 'post not found', so check a few numbers below too.
+        for back in (0, 1, 2, 3, 5, 8, 13, 21):
+            if n - back < 1:
+                break
+            try:
+                return self.posts(channel_id, (channel_id << 32) + n - back, prev_count=3, next_count=3)
+            except ChatError as exc:
+                if exc.code != 402:
+                    raise
+        return None
 
     def first_post(self, channel_id: int) -> dict | None:
         """Oldest message of a channel. (Asking without an anchor is unreliable - some channels
@@ -170,11 +174,14 @@ class ChatUser:
     def latest_post_id(self, channel_id: int, page: int = 200, max_pages: int = 1000) -> int:
         """Newest message id in a channel (0 if empty).
 
-        Binary search on the message number: an anchor past the last message is 'not found',
-        anything up to it works (about 32 quick requests), then step forward to be sure."""
+        Doubling then binary search on the message number: an anchor past the last message is
+        'not found', anything up to it works, then step forward to be sure."""
         if self._exists_up_to(channel_id, 1) is None:
             return 0
-        lo, hi = 1, 0xFFFFFFFF
+        lo, hi = 1, 2
+        while hi < 0xFFFFFFFF and self._exists_up_to(channel_id, hi) is not None:
+            lo, hi = hi, min(hi * 2, 0xFFFFFFFF)
+        hi -= 1
         while lo < hi:
             mid = (lo + hi + 1) // 2
             if self._exists_up_to(channel_id, mid) is None:

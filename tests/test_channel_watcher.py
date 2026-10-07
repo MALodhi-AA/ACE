@@ -168,7 +168,7 @@ def test_user_client_relogs_in_and_finds_latest_post():
 
     c = _client(handler)
     assert c.latest_post_id(CID) == BASE + 9
-    assert calls["login"] == 2 and calls["list"] < 45
+    assert calls["login"] == 2 and calls["list"] < 80
     assert c.first_post(CID)["post_id"] == BASE + 1
 
 
@@ -506,3 +506,31 @@ def test_empty_chat_does_not_block_other_chats(tmp_path):
     chat.new(msg(EMPTY, 1, "whoami"))                          # first message in the empty chat
     w.poll_once()
     assert chat.sent[-1][0] == EMPTY and "user_id: 5" in chat.sent[-1][2]
+
+
+# --- v0.7.1: the last message ACE saw is deleted ------------------------------------
+class DeletingChat(FakeChat):
+    """Like Chat: an anchor on a deleted (or missing) message answers 402."""
+
+    def posts(self, cid, anchor, next_count=0, prev_count=0, thread_id=None):
+        if not any(p["post_id"] == anchor for p in self.all):
+            raise ChatError("post not found", code=402)
+        return super().posts(cid, anchor, next_count=next_count, prev_count=prev_count)
+
+    def first_post(self, cid):
+        ps = sorted((p for p in self.all if p["channel_id"] == cid), key=lambda p: p["post_id"])
+        return ps[0] if ps else None
+
+
+def test_files_still_saved_after_last_seen_message_is_deleted(tmp_path):
+    chat = DeletingChat([post(1, "system"), post(2), post(3, "file", "old.pdf")])
+    w = ChannelWatcher(chat, store=LocalStore(tmp_path / "files"), state_path=tmp_path / "s.json", tz="Asia/Dubai")
+    w.poll_once()
+    assert w.state[str(CID)]["last_id"] == BASE + 3
+    chat.all = [p for p in chat.all if p["post_id"] != BASE + 3]      # someone deletes it
+    chat.new(post(4))
+    chat.new(post(5, "file", "Mara receipt.pdf"))
+    assert w.poll_once() == 1
+    assert w.state[str(CID)]["last_id"] == BASE + 5
+    assert any("Saved" in t for _, _, t in chat.sent)
+    assert w.poll_once() == 0                                          # no repeat

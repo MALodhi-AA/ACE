@@ -220,6 +220,7 @@ class ChannelWatcher:
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ace-chat-job")
         self._users: dict[int, str] = {}
         self._polls = 0
+        self._gone_logged: set[tuple[int, int]] = set()
         self._saved: dict[int, set[int]] = {}       # channel -> post ids already saved
         self._channels: list[dict] = []
         self._collecting = threading.Lock()
@@ -339,17 +340,49 @@ class ChannelWatcher:
             self._save()
         return saved
 
+    BACK_STEPS = (0, 1, 2, 3, 4, 5, 10, 20, 50, 100, 200, 500, 1000)
+
+    def existing_anchor(self, cid: int, post_id: int) -> int | None:
+        """An existing message id at or just below post_id.
+
+        Chat answers 'post not found' (402) when the anchor message was deleted (or never
+        existed), so if the message ACE last saw is deleted every later request would fail.
+        Step back until Chat accepts the anchor (replies and main messages both work)."""
+        base = cid << 32
+        for back in self.BACK_STEPS:
+            n = post_id - back
+            if n <= base:
+                break
+            try:
+                self.chat.posts(cid, n, next_count=0, prev_count=0)
+                return n
+            except ChatError as exc:
+                if exc.code != 402:
+                    raise
+        first = self.chat.first_post(cid) if hasattr(self.chat, "first_post") else None
+        return first["post_id"] if first else None
+
+    def posts_from(self, cid: int, anchor: int, **kw) -> list[dict]:
+        """chat.posts(), retried from an existing anchor if the given one was deleted."""
+        try:
+            return self.chat.posts(cid, anchor, **kw)
+        except ChatError as exc:
+            if exc.code != 402:
+                raise
+        good = self.existing_anchor(cid, anchor)
+        if good is None:
+            return []
+        if (cid, anchor) not in self._gone_logged:
+            self._gone_logged.add((cid, anchor))
+            log.info("channel %s: message %s is gone - continuing from %s", cid, anchor, good)
+        return self.chat.posts(cid, good, **kw)
+
     def _catch_up(self, ch: dict, st: dict) -> int:
         cid = int(ch["channel_id"])
         saved = 0
         while True:
             anchor = max(st["last_id"], (cid << 32) + 1)       # Chat needs an anchor of 1 or more
-            try:
-                batch = self.chat.posts(cid, anchor, next_count=PAGE)
-            except ChatError as exc:
-                if exc.code == 402:                           # "post not found": chat still empty
-                    return saved
-                raise
+            batch = self.posts_from(cid, anchor, next_count=PAGE)  # copes with deleted anchors / empty chats
             newer = sorted((p for p in batch if p.get("post_id", 0) > st["last_id"]), key=lambda p: p["post_id"])
             if not newer:
                 return saved
@@ -373,7 +406,7 @@ class ChannelWatcher:
         cid = int(ch["channel_id"])
         if st.get("last_id", 0) <= (cid << 32):
             return 0
-        recent = sorted(self.chat.posts(cid, st["last_id"], prev_count=RECENT_ROOTS),
+        recent = sorted(self.posts_from(cid, st["last_id"], prev_count=RECENT_ROOTS),
                         key=lambda p: p["post_id"])
         threads = st.setdefault("threads", {})
         first_scan = not st.get("threads_ready")
@@ -393,7 +426,7 @@ class ChannelWatcher:
             anchor = th["last_id"] or (recent[i - 1]["post_id"] if i > 0 else rid - 1)
             done = True
             while True:
-                replies = sorted((p for p in self.chat.posts(cid, anchor, next_count=PAGE, thread_id=rid)
+                replies = sorted((p for p in self.posts_from(cid, anchor, next_count=PAGE, thread_id=rid)
                                   if p.get("thread_id") == rid and p["post_id"] != rid
                                   and p["post_id"] > th["last_id"]
                                   and p.get("create_at", 0) > th.get("since", 0)), key=lambda p: p["post_id"])
