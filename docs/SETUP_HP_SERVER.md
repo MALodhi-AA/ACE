@@ -117,6 +117,24 @@ Message the ACE bot in Synology Chat:
    `mis Food Box/2026/09 Sep/TB.xlsx` (part of the file name is enough).
 5. Open the report from `ACE/reports/<Company>/<Period>/` in Synology Drive.
 
+## 7. ACE in channels (v0.4)
+
+ACE can also be a member of Synology Chat channels, with its own Chat account
+(separate from the bot). It saves every file shared in its channels to
+`ACE/channel-files/<Channel>/<YYYY-MM>/` and replies under the file.
+
+1. On the DS723+: Control Panel → User & Group → create `ace` (group `users`, no shared
+   folders, **Applications: Synology Chat only**, no 2-step verification).
+   Login Portal → Applications → Synology Chat → alias `chat`; sign in once at
+   `https://<DS723+>:5001/chat` as `ace` and set the name *ACE* and the avatar.
+2. In `.env`: `CHAT_USER=ace` and `CHAT_PASSWORD=...` (see `.env.example` for options).
+3. `docker compose up -d --build`, then add ACE to channels like any colleague.
+4. `status` shows *Channel files ✓ - watching N channels*.
+
+ACE starts from the newest post when it first sees a channel (no old files). Remove ACE
+from a channel, or list it in `CHAT_IGNORE_CHANNELS`, to stop it saving there.
+Tell staff that ACE saves files shared in the channels it is in.
+
 ## Keeping it running after a reboot
 
 Docker Desktop is a desktop app: containers only start once Docker Desktop is running,
@@ -151,4 +169,6 @@ Changes only under `skills/` or `config/` need just `docker compose restart ace`
 | Bot never answers | `docker compose logs ace`; firewall rule allows the DS723+ IP? Outgoing URL uses the HP server's LAN IP? |
 | `401` in logs | Bot token in `.env` doesn't match the bot |
 | `Synology Chat ✗` / replies not delivered | `SYNOLOGY_BASE_URL` must be the DS723+ LAN IP, reachable from the HP server |
+| `Channel files: starting ✗ - Chat sign-in failed` | `CHAT_USER`/`CHAT_PASSWORD`, Synology Chat allowed for `ace` on the DS723+, no 2-step verification |
+| A shared file was not saved | `docker compose logs ace`; ACE needs Read/Write on `ACE` (AA-RS); files over `CHAT_MAX_FILE_MB` are skipped |
 | `AI Model ✗` | API key, spend limit, or outbound internet from the HP server |

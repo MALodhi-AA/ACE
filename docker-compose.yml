@@ -12,7 +12,7 @@ name: ace
 services:
   ace:
     build: .
-    image: ace:0.3.2
+    image: ace:0.4.0
     container_name: ace
     restart: unless-stopped
     env_file: .env
@@ -23,5 +23,6 @@ services:
       - "${ACE_PORT:-8080}:8080"
     volumes:
       - ./logs:/data/logs                # audit + service logs, local on the HP server
+      - ./state:/data/state              # what ACE has already handled (channel watcher)
       - ./skills:/app/skills:ro          # skill changes need only `docker compose restart ace`
       - ./config:/app/config:ro

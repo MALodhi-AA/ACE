@@ -24,3 +24,6 @@ Thumbs.db
 
 # Local logs on the HP server
 /logs/
+
+# Watcher progress on the HP server
+/state/

@@ -30,7 +30,16 @@ except OSError:
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), handlers=_handlers,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("ace")
+# The channel watcher polls Chat every few seconds - keep request lines out of the log.
+for _name in ("httpx", "httpcore"):
+    logging.getLogger(_name).setLevel(logging.WARNING)
 app = FastAPI(title=PROFILE["name"], version=PROFILE["version"])
+
+
+@app.on_event("startup")
+def _start_channel_watcher() -> None:
+    from integrations.synology_chat import watcher
+    watcher.start()
 
 
 def _run_background(msg: chat.InboundMessage, job) -> None:

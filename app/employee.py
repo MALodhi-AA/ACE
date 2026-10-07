@@ -116,6 +116,10 @@ def status_text(check_ai: bool = True) -> str:
     for src in get_sources().values():
         if src.kind == "local":
             lines.append(f"{src.name} (local) {_tick(src.available())}")
+    from integrations.synology_chat import watcher
+    chan = watcher.status_line()
+    if chan:
+        lines += ["", "Channels:", chan]
     if not settings.allowed_users:
         lines += ["", "⚠️ ALLOWED_USERS is empty - anyone in Chat can use me."]
     return "\n".join(lines)

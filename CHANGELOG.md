@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 - 2026-10-07
+- ACE joins Synology Chat as a team member: with its own Chat account (`CHAT_USER` /
+  `CHAT_PASSWORD`) it watches every channel it has been added to.
+- Every file shared in those channels is saved, never overwritten, to
+  `ACE/channel-files/<Channel>/<YYYY-MM>/` on the Drive NAS, and ACE replies under the
+  file with where it was saved. Old files are not back-filled; files shared while ACE
+  was offline are picked up after a restart (progress kept in `./state`).
+- `status` shows the channel watcher (channels watched, files saved today, last check).
+- New settings: `CHAT_WATCH`, `CHAT_POLL_SECONDS`, `CHAT_MAX_FILE_MB`,
+  `CHAT_REPLY_ON_SAVE`, `CHAT_CHANNEL_NAMES`, `CHAT_IGNORE_CHANNELS`.
+
 ## 0.3.2 - 2026-10-07
 - Synology Chat probe (`python -m integrations.synology_chat.probe`): signs in as ACE's own
   Chat user account and checks that channels, posts and shared files can be read. First

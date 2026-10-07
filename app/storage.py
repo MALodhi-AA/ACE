@@ -45,3 +45,25 @@ def report_store() -> LocalStore | NasStore:
     if nas.configured:
         return NasStore(settings.ace_share, ["reports"])
     return LocalStore(settings.reports_dir)
+
+
+def channel_files_store() -> LocalStore | NasStore:
+    """Where files shared in Chat channels are saved: ACE/channel-files/..."""
+    if nas.configured:
+        return NasStore(settings.ace_share, ["channel-files"])
+    return LocalStore(settings.data_dir / "channel-files")
+
+
+def free_name(store, folder: list[str], name: str) -> str:
+    """`name` if unused in `folder`, else name_v2.ext, name_v3.ext ... (never overwrite)."""
+    if not store.exists(folder + [name]):
+        return name
+    stem, dot, ext = name.rpartition(".")
+    if not dot or not stem:
+        stem, ext, dot = name, "", ""
+    n = 2
+    while True:
+        candidate = f"{stem}_v{n}{dot}{ext}"
+        if not store.exists(folder + [candidate]):
+            return candidate
+        n += 1

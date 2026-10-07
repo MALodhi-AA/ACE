@@ -31,3 +31,13 @@ GitHub Actions runs both the unit and the SMB tests on every push.
   read, the inbox, and optional local folders (`ACE_SOURCES`). Path-escape
   protection and the Excel/CSV-only rule live here.
 - `app/storage.py` – where reports are saved (NAS `ACE/reports` or local folder).
+
+## Chat as a user (channels)
+
+- `integrations/synology_chat/user_client.py` – ACE's own Chat account (Chat web API:
+  channel list, post list with `post_id` + `next_count`/`prev_count`, post create, file get).
+  Post ids are `(channel_id << 32) + n`. Not an official Synology API.
+- `integrations/synology_chat/watcher.py` – polls channels, saves shared files via
+  `app/storage.channel_files_store()`, keeps progress in `STATE_DIR/chat_watch.json`.
+- `python -m integrations.synology_chat.probe` – diagnostics against the real Chat NAS
+  (message text and secrets are never printed).

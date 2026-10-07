@@ -92,7 +92,45 @@ class Settings:
     # Shares never offered as client sources even if `ace` can read them.
     nas_exclude: list[str] = field(default_factory=lambda: [s.strip() for s in os.getenv("NAS_EXCLUDE_SHARES", "").split(";") if s.strip()])
 
+    # --- ACE as a Synology Chat *user* (v0.4: channels) ---------------------
+    # ACE's own Chat account on the DS723+ (Chat application only).
+    chat_user: str = field(default_factory=lambda: os.getenv("CHAT_USER", "").strip())
+    chat_password: str = field(default_factory=lambda: os.getenv("CHAT_PASSWORD", ""))
+    # Save every file shared in the channels ACE is a member of.
+    chat_watch: bool = field(default_factory=lambda: _bool("CHAT_WATCH", True))
+    chat_poll_seconds: int = field(default_factory=lambda: max(5, int(os.getenv("CHAT_POLL_SECONDS", "20") or 20)))
+    chat_max_file_mb: int = field(default_factory=lambda: int(os.getenv("CHAT_MAX_FILE_MB", "200") or 200))
+    # Reply under each saved file ("Saved: ...").
+    chat_reply_on_save: bool = field(default_factory=lambda: _bool("CHAT_REPLY_ON_SAVE", True))
+    # Folder names for channels without a name, e.g. "1=General;2=Random".
+    chat_channel_names_raw: str = field(default_factory=lambda: os.getenv("CHAT_CHANNEL_NAMES", ""))
+    # Channel ids or names ACE should ignore (";"-separated).
+    chat_ignore_raw: str = field(default_factory=lambda: os.getenv("CHAT_IGNORE_CHANNELS", ""))
+    state_override: str = field(default_factory=lambda: os.getenv("STATE_DIR", ""))
+
     timezone: str = field(default_factory=lambda: os.getenv("TZ", "Asia/Dubai"))
+
+    @property
+    def chat_user_configured(self) -> bool:
+        return bool(self.synology_base_url and self.chat_user and self.chat_password)
+
+    @property
+    def chat_channel_names(self) -> dict[str, str]:
+        out = {}
+        for item in self.chat_channel_names_raw.split(";"):
+            if "=" in item:
+                k, v = item.split("=", 1)
+                if k.strip() and v.strip():
+                    out[k.strip()] = v.strip()
+        return out
+
+    @property
+    def chat_ignore(self) -> set[str]:
+        return {v.strip().lower() for v in self.chat_ignore_raw.split(";") if v.strip()}
+
+    @property
+    def state_dir(self) -> Path:
+        return Path(self.state_override) if self.state_override else self.data_dir / "state"
 
     @property
     def nas_configured(self) -> bool:
@@ -137,7 +175,7 @@ class Settings:
         return bool(self.synology_slash_token and self.synology_incoming_webhook_url)
 
     def ensure_dirs(self) -> None:
-        for d in (self.inbox_dir, self.reports_dir, self.log_dir):
+        for d in (self.inbox_dir, self.reports_dir, self.log_dir, self.state_dir):
             try:
                 d.mkdir(parents=True, exist_ok=True)
             except OSError:

@@ -32,6 +32,12 @@ The design rule is **AI Employee → Tools + Skills + Tasks + Permissions + Audi
 "bot + giant prompt". Figures are calculated in Python and are reproducible; the model
 writes commentary from those figures.
 
+## In channels
+
+Add ACE (its own Chat account, `CHAT_USER`) to a channel like a colleague. Every file
+shared there is saved to `ACE/channel-files/<Channel>/<YYYY-MM>/` on AA-RS and ACE
+replies under the file. See *ACE in channels* in `docs/SETUP_HP_SERVER.md`.
+
 ## Chat commands
 
 Send these to the bot in a direct message, or after `/ace` in a channel:
