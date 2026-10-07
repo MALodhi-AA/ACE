@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2 - 2026-10-07
+- Synology Chat probe (`python -m integrations.synology_chat.probe`): signs in as ACE's own
+  Chat user account and checks that channels, posts and shared files can be read. First
+  step towards v0.4 (ACE as a channel member). Message text and secrets are never printed.
+- New settings `CHAT_USER` / `CHAT_PASSWORD`.
+
 ## 0.3.1 - 2026-10-07
 - Chat replies are plain text: Synology Chat does not render markdown, so ACE is told
   not to use it and any `**bold**`, `#` headings, backticks and `*` bullets are stripped

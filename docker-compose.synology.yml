@@ -7,7 +7,7 @@ name: ace
 services:
   ace:
     build: .
-    image: ace:0.3.1
+    image: ace:0.3.2
     container_name: ace
     restart: unless-stopped
     env_file: .env
