@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.3 - 2026-10-07
+- Threads: ACE now also watches replies inside threads (Chat keeps them out of the
+  normal message list). Files shared in a thread are saved like any other, and
+  `@ACE` in a thread is answered in that thread. "Saved: ..." confirmations go into
+  the file's thread.
+- Threads on the last 30 messages of each channel are followed; replies that existed
+  before ACE first looked are not back-filled.
+
 ## 0.4.2 - 2026-10-07
 - Fix: direct chats with the ACE user were not seen. Synology Chat lists unnamed
   conversations as type "anonymous"; with 2 members it is a direct chat (ACE answers

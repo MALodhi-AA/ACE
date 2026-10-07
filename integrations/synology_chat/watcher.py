@@ -41,6 +41,8 @@ SKIP_TYPES = {"synobot", "chatbot", "bot"}
 # Synology Chat lists unnamed conversations (one-to-one and small group chats) as
 # type "anonymous": 2 members = direct chat with ACE, more = group conversation.
 PAGE = 100
+RECENT_ROOTS = 30          # threads on the last N messages of a channel are watched for replies
+THREAD_SCAN_EVERY = 2      # polls between thread scans
 MAX_ATTEMPTS = 3
 _BAD_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 _MENTION_TOKEN = re.compile(r"@u:\d+\s*")
@@ -93,6 +95,7 @@ class ChannelWatcher:
         self._stop = threading.Event()
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ace-chat-job")
         self._users: dict[int, str] = {}
+        self._polls = 0
         me = settings.chat_user_id or self.state.get("_me", {}).get("id")
         if me and getattr(self.chat, "me", None) is None:
             self.chat.me = int(me)
@@ -171,11 +174,13 @@ class ChannelWatcher:
                 audit("channel_watch_start", channel_id=cid, channel=self.folder_name(ch), type=ch.get("type"),
                       from_post=latest)
                 continue
-            if ch.get("last_post_at", 0) and ch.get("last_post_at", 0) <= st.get("last_at", 0):
-                continue  # nothing new
-            saved += self._catch_up(ch, st)
-            st["last_at"] = max(st.get("last_at", 0), ch.get("last_post_at", 0))
-            self._save()
+            if not (ch.get("last_post_at", 0) and ch.get("last_post_at", 0) <= st.get("last_at", 0)):
+                saved += self._catch_up(ch, st)
+                st["last_at"] = max(st.get("last_at", 0), ch.get("last_post_at", 0))
+                self._save()
+            if self._polls % THREAD_SCAN_EVERY == 0:
+                saved += self._scan_threads(ch, st)
+        self._polls += 1
         now = datetime.now(self.tz)
         self.stats["saved_today"] += saved
         self.stats["last_check"] = now
@@ -203,6 +208,59 @@ class ChannelWatcher:
             if len(newer) < PAGE:
                 return saved
 
+    # --- thread replies ---------------------------------------------------------------
+    def _scan_threads(self, ch: dict, st: dict) -> int:
+        """Look for new replies in threads on the channel's recent messages.
+
+        Chat keeps replies out of the normal post list. A message with replies has
+        thread_id == its own post_id and a `last_comment_at` time; its replies are listed
+        with thread_id=<message> and an anchor before the replies.
+        """
+        cid = int(ch["channel_id"])
+        if not st.get("last_id"):
+            return 0
+        recent = sorted(self.chat.posts(cid, st["last_id"], prev_count=RECENT_ROOTS),
+                        key=lambda p: p["post_id"])
+        threads = st.setdefault("threads", {})
+        first_scan = not st.get("threads_ready")
+        saved = 0
+        for i, root in enumerate(recent):
+            rid = root["post_id"]
+            if root.get("thread_id") != rid or not root.get("last_comment_at"):
+                continue
+            th = threads.get(str(rid))
+            if th is None:
+                # Threads that already had replies when ACE first looked: start from now.
+                th = threads[str(rid)] = {"seen_at": root["last_comment_at"] if first_scan else 0,
+                                          "last_id": 0}
+            if root["last_comment_at"] <= th["seen_at"]:
+                continue
+            anchor = th["last_id"] or (recent[i - 1]["post_id"] if i > 0 else rid - 1)
+            done = True
+            while True:
+                replies = sorted((p for p in self.chat.posts(cid, anchor, next_count=PAGE, thread_id=rid)
+                                  if p.get("thread_id") == rid and p["post_id"] != rid
+                                  and p["post_id"] > th["last_id"]), key=lambda p: p["post_id"])
+                for post in replies:
+                    finished, ok = self._handle(ch, post)
+                    if not finished:
+                        done = False
+                        break
+                    saved += ok
+                    th["last_id"] = anchor = post["post_id"]
+                if not done or len(replies) < PAGE:
+                    break
+            if done:
+                th["seen_at"] = root["last_comment_at"]
+            self._save()
+        st["threads_ready"] = True
+        # forget threads that dropped out of the recent window
+        keep = {str(p["post_id"]) for p in recent}
+        for k in [k for k in threads if k not in keep]:
+            threads.pop(k)
+        self._save()
+        return saved
+
     def _handle(self, ch: dict, post: dict) -> tuple[bool, int]:
         """Returns (finished_with_post, files_saved)."""
         if post.get("delete_at") or post.get("type") == "system":
@@ -217,13 +275,14 @@ class ChannelWatcher:
             return True, 0
         pid = post["post_id"]
         cid = int(ch["channel_id"])
+        thread = post.get("thread_id") or pid
         original = fp.get("name") or f"file_{pid}"
         size = int(fp.get("size") or 0)
         folder_name = self.folder_name(ch)
         if size > settings.chat_max_file_mb * 1024 * 1024:
             audit("channel_file_skipped", channel=folder_name, post_id=pid, file=original, size=size,
                   reason="too large")
-            self._reply(cid, pid, f"Not saved: {original} is larger than {settings.chat_max_file_mb} MB.")
+            self._reply(cid, thread, f"Not saved: {original} is larger than {settings.chat_max_file_mb} MB.")
             return True, 0
         month = datetime.fromtimestamp(post.get("create_at", 0) / 1000, self.tz).strftime("%Y-%m")
         folder = [folder_name, month]
@@ -241,14 +300,14 @@ class ChannelWatcher:
             if n < MAX_ATTEMPTS:
                 return False, 0
             audit("channel_file_failed", channel=folder_name, post_id=pid, file=original, error=str(exc))
-            self._reply(cid, pid, f"I couldn't save {original}: {exc}")
+            self._reply(cid, thread, f"I couldn't save {original}: {exc}")
             self.attempts.pop(pid, None)
             return True, 0
         self.attempts.pop(pid, None)
         audit("channel_file_saved", channel=folder_name, channel_id=cid, post_id=pid, file=original,
               saved_as=where, size=len(data), shared_by=post.get("creator_id"))
         log.info("saved %s -> %s", original, where)
-        self._reply(cid, pid, f"Saved: {name} -> {where.replace(chr(92), '/')}")
+        self._reply(cid, thread, f"Saved: {name} -> {where.replace(chr(92), '/')}")
         return True, 1
 
     # --- conversation ---------------------------------------------------------------

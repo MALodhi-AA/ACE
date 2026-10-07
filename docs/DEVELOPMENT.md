@@ -36,7 +36,10 @@ GitHub Actions runs both the unit and the SMB tests on every push.
 
 - `integrations/synology_chat/user_client.py` – ACE's own Chat account (Chat web API:
   channel list, post list with `post_id` + `next_count`/`prev_count`, post create, file get).
-  Post ids are `(channel_id << 32) + n`. Not an official Synology API.
+  Post ids are `(channel_id << 32) + n`; thread replies share that numbering but are hidden
+  from the normal list. A message with replies has `thread_id == post_id` and
+  `last_comment_at`; its replies come from `list` with `thread_id=<message>` and an anchor
+  *before* the replies (not the message itself). Not an official Synology API.
 - `integrations/synology_chat/watcher.py` – polls channels, saves shared files via
   `app/storage.channel_files_store()`, keeps progress in `STATE_DIR/chat_watch.json`.
 - `python -m integrations.synology_chat.probe` – diagnostics against the real Chat NAS

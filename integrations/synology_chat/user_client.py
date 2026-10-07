@@ -132,9 +132,14 @@ class ChatUser:
         data = res.get("data", {})
         return data.get("channels", []) if isinstance(data, dict) else []
 
-    def posts(self, channel_id: int, anchor: int, next_count: int = 0, prev_count: int = 0) -> list[dict]:
+    def posts(self, channel_id: int, anchor: int, next_count: int = 0, prev_count: int = 0,
+              thread_id: int | None = None) -> list[dict]:
+        """Main posts around `anchor`; with `thread_id`, the replies of that thread after `anchor`
+        (the anchor must not be the thread's own first post - use an earlier post or a reply)."""
+        extra = {"thread_id": thread_id} if thread_id else {}
         res = self._ok(self.call("SYNO.Chat.Post", "list", self.POST_VERSION, channel_id=channel_id,
-                                 post_id=anchor, next_count=next_count, prev_count=prev_count), "post list")
+                                 post_id=anchor, next_count=next_count, prev_count=prev_count, **extra),
+                       "post list")
         data = res.get("data", {})
         posts = data.get("posts", []) if isinstance(data, dict) else []
         return [p for p in posts if p.get("channel_id") == channel_id]

@@ -255,3 +255,64 @@ def test_group_conversation_needs_a_mention(talk):
     chat.new(msg(GROUP, 2, "@ACE whoami"))
     w.poll_once()
     assert chat.sent[-1][0] == GROUP
+
+
+# --- v0.4.3: replies inside threads --------------------------------------------------
+class ThreadChat(TalkChat):
+    """Mimics Chat: replies are hidden from the main list and listed per thread."""
+
+    def posts(self, cid, anchor, next_count=0, prev_count=0, thread_id=None):
+        ps = sorted((p for p in self.all if p["channel_id"] == cid), key=lambda p: p["post_id"])
+        if thread_id:
+            return [p for p in ps if p.get("thread_id") == thread_id and p["post_id"] != thread_id
+                    and p["post_id"] >= anchor][: next_count + 1]
+        main = [p for p in ps if p.get("thread_id") in (0, None, p["post_id"])]
+        before = [p for p in main if p["post_id"] < anchor][-prev_count:] if prev_count else []
+        after = [p for p in main if p["post_id"] >= anchor][: next_count + 1]
+        return before + after
+
+    def comment(self, root_n, n, **kw):
+        root = next(p for p in self.all if p["post_id"] == BASE + root_n)
+        p = (post(n, "file", kw["name"]) if "name" in kw else msg(CID, n, kw.get("text", "hi"),
+                                                                    mentions=kw.get("mentions", ())))
+        p["thread_id"] = root["post_id"]
+        root["thread_id"] = root["post_id"]
+        root["comment_count"] = root.get("comment_count", 0) + 1
+        root["last_comment_at"] = 1791366959588 + n
+        self.all.append(p)          # note: channel last_post_at does NOT change for replies
+
+
+def test_files_and_mentions_inside_threads(tmp_path):
+    chat = ThreadChat([post(1, "system"), post(2), post(3, "file", "root.pdf")])
+    chat.comment(3, 4, text="old reply before ACE joined")
+    w = ChannelWatcher(chat, store=LocalStore(tmp_path / "files"), state_path=tmp_path / "s.json", tz="Asia/Dubai")
+    w.poll_once()                     # baseline (channel)
+    w.poll_once()                     # thread scan baseline: old reply ignored
+    w.poll_once()
+    assert chat.sent == []
+    chat.comment(3, 5, name="Cred invoice 11 sep 2026_2.png")
+    chat.comment(3, 6, text="@u:189 whoami", mentions=[189])
+    chat.me = 189
+    for _ in range(2):
+        w.poll_once()
+    saved = tmp_path / "files" / "ACE-TEST" / "2026-10" / "Cred invoice 11 sep 2026_2.png"
+    assert saved.exists()
+    texts = [(t, txt) for _, t, txt in chat.sent]
+    assert any(t == BASE + 3 and txt.startswith("Saved:") for t, txt in texts)    # reply in the thread
+    assert any(t == BASE + 3 and "user_id: 5" in txt for t, txt in texts)
+    n = len(chat.sent)
+    for _ in range(2):
+        w.poll_once()
+    assert len(chat.sent) == n        # nothing handled twice
+
+
+def test_new_thread_after_start_is_followed(tmp_path):
+    chat = ThreadChat([post(1, "system")])
+    w = ChannelWatcher(chat, store=LocalStore(tmp_path / "files"), state_path=tmp_path / "s.json", tz="Asia/Dubai")
+    w.poll_once(); w.poll_once(); w.poll_once()
+    chat.new(post(2, "file", "a.pdf"))
+    w.poll_once(); w.poll_once()
+    chat.comment(2, 3, name="b.pdf")
+    w.poll_once(); w.poll_once()
+    folder = tmp_path / "files" / "ACE-TEST" / "2026-10"
+    assert sorted(p.name for p in folder.iterdir()) == ["a.pdf", "b.pdf"]
