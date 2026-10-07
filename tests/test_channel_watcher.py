@@ -168,3 +168,75 @@ def test_user_client_reports_login_problem():
     c = _client(lambda r: httpx.Response(200, json={"success": False, "error": {"code": 402}}))
     with pytest.raises(ChatError, match="allow the Synology Chat application"):
         c.login()
+
+
+# --- v0.4.1: ACE answers direct messages and @ACE mentions -------------------------
+DM = 300
+
+
+class TalkChat(FakeChat):
+    me = None
+
+    def channels(self):
+        return super().channels() + [
+            {"channel_id": DM, "name": "", "type": "conversation", "is_joined": True,
+             "last_post_at": self.last_post_at}]
+
+    def send(self, cid, text, thread_id=None):
+        self.me = 189
+        return super().send(cid, text, thread_id)
+
+    def users(self):
+        return {5: "ma"}
+
+
+def msg(cid, n, text, creator=5, mentions=()):
+    return {"channel_id": cid, "post_id": (cid << 32) + n, "type": "normal", "create_at": 1791336247632,
+            "creator_id": creator, "delete_at": 0, "message": text, "mentions": list(mentions), "thread_id": 0}
+
+
+@pytest.fixture
+def talk(tmp_path):
+    chat = TalkChat([post(1, "system"), msg(DM, 1, "old question")])
+    w = ChannelWatcher(chat, store=LocalStore(tmp_path / "files"), state_path=tmp_path / "s.json", tz="Asia/Dubai")
+    w.poll_once()                            # baseline: old messages are not answered
+    assert chat.sent == []
+    return chat, w
+
+
+def test_direct_message_is_answered(talk):
+    chat, w = talk
+    chat.new(msg(DM, 2, "whoami"))
+    w.poll_once()
+    assert chat.sent[-1][0] == DM and "user_id: 5" in chat.sent[-1][2]
+    assert w.stats["direct"] == 1 and w.stats["answered_today"] == 1
+
+
+def test_channel_message_needs_a_mention(talk):
+    chat, w = talk
+    chat.new(msg(CID, 4, "just chatting"))
+    w.poll_once()
+    assert chat.sent == []
+    chat.new(msg(CID, 5, "@u:189 whoami", mentions=[189]))
+    w.chat.me = 189
+    w.poll_once()
+    assert chat.sent[-1][0] == CID and "user_id: 5" in chat.sent[-1][2]
+
+
+def test_own_posts_are_ignored_and_name_mention_works(talk):
+    chat, w = talk
+    chat.me = 189
+    chat.new(msg(CID, 4, "@ACE whoami", creator=189))
+    w.poll_once()
+    assert chat.sent == []
+    chat.new(msg(CID, 5, "@ACE whoami"))
+    w.poll_once()
+    assert len(chat.sent) == 1
+
+
+def test_clean_text_and_kind():
+    from integrations.synology_chat.watcher import clean_text, kind
+    assert clean_text("@u:189 mis Food Box TB") == "mis Food Box TB"
+    assert clean_text("@ACE, status") == "status"
+    assert kind({"type": "synobot"}) is None and kind({"type": "private"}) == "channel"
+    assert kind({"type": "conversation"}) == "direct"

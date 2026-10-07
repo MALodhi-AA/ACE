@@ -131,6 +131,9 @@ ACE can also be a member of Synology Chat channels, with its own Chat account
 3. `docker compose up -d --build`, then add ACE to channels like any colleague.
 4. `status` shows *Channel files ✓ - watching N channels*.
 
+ACE also answers through this account: send it a direct message, or write `@ACE ...`
+in a channel (same commands as the bot). In channels it only reacts when mentioned.
+
 ACE starts from the newest post when it first sees a channel (no old files). Remove ACE
 from a channel, or list it in `CHAT_IGNORE_CHANNELS`, to stop it saving there.
 Tell staff that ACE saves files shared in the channels it is in.

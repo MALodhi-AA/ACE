@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.1 - 2026-10-07
+- ACE talks through its own Chat account too: it answers every direct message sent to
+  the ACE user and every channel message that mentions @ACE, with the same commands as
+  the bot (`status`, `ask`, `files`, `mis` ...). `ALLOWED_USERS` applies as before.
+- Only new messages are answered (nothing from before ACE first saw the chat).
+- ACE checks its chats every 5 seconds by default (`CHAT_POLL_SECONDS`).
+- `status` shows the Chat account line: channels, direct chats, files saved and
+  messages answered today.
+
 ## 0.4.0 - 2026-10-07
 - ACE joins Synology Chat as a team member: with its own Chat account (`CHAT_USER` /
   `CHAT_PASSWORD`) it watches every channel it has been added to.

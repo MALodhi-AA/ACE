@@ -98,7 +98,9 @@ class Settings:
     chat_password: str = field(default_factory=lambda: os.getenv("CHAT_PASSWORD", ""))
     # Save every file shared in the channels ACE is a member of.
     chat_watch: bool = field(default_factory=lambda: _bool("CHAT_WATCH", True))
-    chat_poll_seconds: int = field(default_factory=lambda: max(5, int(os.getenv("CHAT_POLL_SECONDS", "20") or 20)))
+    chat_poll_seconds: int = field(default_factory=lambda: max(3, int(os.getenv("CHAT_POLL_SECONDS", "5") or 5)))
+    # ACE's own Chat user id (optional - learnt automatically from its first post)
+    chat_user_id: int | None = field(default_factory=lambda: int(os.getenv("CHAT_USER_ID")) if os.getenv("CHAT_USER_ID", "").strip().isdigit() else None)
     chat_max_file_mb: int = field(default_factory=lambda: int(os.getenv("CHAT_MAX_FILE_MB", "200") or 200))
     # Reply under each saved file ("Saved: ...").
     chat_reply_on_save: bool = field(default_factory=lambda: _bool("CHAT_REPLY_ON_SAVE", True))

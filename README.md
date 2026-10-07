@@ -36,7 +36,8 @@ writes commentary from those figures.
 
 Add ACE (its own Chat account, `CHAT_USER`) to a channel like a colleague. Every file
 shared there is saved to `ACE/channel-files/<Channel>/<YYYY-MM>/` on AA-RS and ACE
-replies under the file. See *ACE in channels* in `docs/SETUP_HP_SERVER.md`.
+replies under the file. Staff can also message the ACE user directly or write `@ACE ...` in a
+channel. See *ACE in channels* in `docs/SETUP_HP_SERVER.md`.
 
 ## Chat commands
 

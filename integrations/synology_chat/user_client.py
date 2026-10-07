@@ -59,6 +59,7 @@ class ChatUser:
         self.sid = ""
         self.syno_token = ""
         self.apis: dict[str, dict] = {}
+        self.me: int | None = None          # ACE's own Chat user id (learnt from its posts)
         self._lock = threading.RLock()
 
     # --- low level -----------------------------------------------------------
@@ -169,15 +170,34 @@ class ChatUser:
 
     def send(self, channel_id: int, text: str, thread_id: int | None = None) -> bool:
         """Post a plain-text message (as a thread reply when possible)."""
+        res = {}
         if thread_id:
             res = self.call("SYNO.Chat.Post", "create", self.POST_VERSION, channel_id=channel_id,
                             message=text, thread_id=thread_id)
-            if res.get("success"):
-                return True
-        res = self.call("SYNO.Chat.Post", "create", self.POST_VERSION, channel_id=channel_id, message=text)
+        if not res.get("success"):
+            res = self.call("SYNO.Chat.Post", "create", self.POST_VERSION, channel_id=channel_id, message=text)
         if not res.get("success"):
             log.warning("Chat post failed: %s", res.get("error"))
-        return bool(res.get("success"))
+            return False
+        creator = (res.get("data") or {}).get("creator_id")
+        if creator:
+            self.me = int(creator)
+        return True
+
+    def users(self) -> dict[int, str]:
+        """Chat user id -> user name (best effort; empty if the call is not available)."""
+        top = int(self.apis.get("SYNO.Chat.User", {}).get("maxVersion", 3))
+        for v in range(top, 0, -1):
+            try:
+                res = self.call("SYNO.Chat.User", "list", v)
+            except httpx.HTTPError:
+                return {}
+            if res.get("success"):
+                data = res.get("data", {})
+                rows = data.get("users", []) if isinstance(data, dict) else data
+                return {int(u["user_id"]): str(u.get("username") or u.get("nickname") or u["user_id"])
+                        for u in rows if isinstance(u, dict) and "user_id" in u}
+        return {}
 
     def download(self, post_id: int) -> bytes:
         res = self.call("SYNO.Chat.Post.File", "get", self.FILE_VERSION, post_id=post_id)
