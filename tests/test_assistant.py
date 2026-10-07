@@ -263,6 +263,7 @@ class FakeAttendanceDB:
 
     def query(self, sql, args=None):
         self.queries.append(sql)
+        self.last_args = args
         assert sql.lstrip().upper().startswith("SELECT")
         if "FROM employees" in sql:
             return [dict(e) for e in self.employees]
@@ -357,7 +358,7 @@ def test_attendance_and_team_tasks_in_digest_and_commands(office_att):
                 bot_task("T2610-003", "Food Box MIS", 2, status="blocked")]
     say(MA, "who is in")
     a = last_to(chat, DM_MA)
-    assert "Attendance: 2 of 3 checked in today" in a and "Late: Ali (11:42, +42 min)" in a
+    assert "Attendance today: 2 of 3 checked in" in a and "Late: Ali (11:42, +42 min)" in a
     assert "On leave: Sir Amir Hussain (sick)" in a
     say(MA, "what is Ali working on?")
     p = last_to(chat, DM_MA)
@@ -451,7 +452,7 @@ def test_complex_question_goes_to_full_ai_with_tools(brainy):
     say(MA, "anything I should worry about today?")
     assert last_to(chat, DM_MA).startswith("Sir Amir Hussain is on leave")
     results = calls["full"][-1][-1]["content"]
-    assert "Attendance:" in results[0]["content"] and "T2610-010 Volt VAT" in results[1]["content"]
+    assert "Attendance today:" in results[0]["content"] and "T2610-010 Volt VAT" in results[1]["content"]
     assert not w.assistant.store.memories("pattern")            # full AI answers are not turned into patterns
 
 
@@ -486,3 +487,62 @@ def test_staff_never_reach_the_brain(brainy):
     chat, w, say, db, calls, picks, fulls = brainy
     say(ALI, "what is Amir doing these days?")
     assert calls["fast"] == [] and "Attendance" not in last_to(chat, DM_ALI)
+
+
+# --- v0.7.2: attendance for other days, safe tool-use replies, clearer AI errors ----------
+def test_day_from_understands_common_words():
+    from datetime import date
+    from app.brain import day_from
+    today = date(2026, 10, 8)                                      # a Thursday
+    assert day_from("today", today) is None and day_from("", today) is None
+    assert day_from("yesterday", today) == date(2026, 10, 7)
+    assert day_from("day before yesterday", today) == date(2026, 10, 6)
+    assert day_from("Monday", today) == date(2026, 10, 5)
+    assert day_from("thursday", today) == date(2026, 10, 1)       # last week's, not today
+    assert day_from("2026-10-02", today) == date(2026, 10, 2)
+    assert day_from("5 Oct 2026", today) == date(2026, 10, 5)
+    with pytest.raises(ValueError):
+        day_from("2026-12-01", today)
+    with pytest.raises(ValueError):
+        day_from("someday", today)
+
+
+def test_attendance_for_yesterday(brainy):
+    chat, w, say, db, calls, picks, fulls = brainy
+    picks["next"] = {"tool": "attendance_today", "args": {"date": "yesterday"}, "complex": False}
+    say(MA, "who checked in late yesterday?")
+    out = last_to(chat, DM_MA)
+    assert out.startswith("Attendance yesterday: 1 of 3 checked in") and "in now" not in out
+    assert "Did not check in: " in out
+    from app.tasks import now
+    assert db.last_args[0] == now().date() - timedelta(days=1)
+
+
+def test_full_ai_keeps_thinking_and_drops_empty_text(brainy):
+    chat, w, say, db, calls, picks, fulls = brainy
+    picks["next"] = {"tool": None, "complex": True}
+    fulls["script"] = [
+        lambda m: NS(content=[NS(type="thinking", thinking="check tasks", signature="sig1"),
+                              NS(type="text", text=""),
+                              NS(type="tool_use", id="a", name="team_tasks", input={"view": "overdue"})]),
+        lambda m: NS(content=[NS(type="text", text="One overdue task: Volt VAT.")]),
+    ]
+    say(MA, "how are we doing on deadlines?")
+    assert last_to(chat, DM_MA) == "One overdue task: Volt VAT."
+    sent_back = calls["full"][-1][1]["content"]
+    assert sent_back[0] == {"type": "thinking", "thinking": "check tasks", "signature": "sig1"}
+    assert all(b.get("text", "x") for b in sent_back) and sent_back[-1]["type"] == "tool_use"
+
+
+def test_ai_error_reason_is_shown(brainy):
+    chat, w, say, db, calls, picks, fulls = brainy
+    picks["next"] = {"tool": None, "complex": True}
+
+    class BadRequestError(Exception):
+        body = {"error": {"type": "invalid_request_error", "message": "model: claude-x not found"}}
+
+    def boom(m):
+        raise BadRequestError("400")
+    fulls["script"] = [boom]
+    say(MA, "compare this week with last week")
+    assert last_to(chat, DM_MA) == "My AI model is not available right now (BadRequestError: model: claude-x not found)."

@@ -136,11 +136,14 @@ class Bot:
 
     # ---------------------------------------------------------------- attendance
     def today(self) -> list[Day]:
+        return self.day(datetime.now(_local_tz()).date())
+
+    def day(self, on) -> list[Day]:
+        """Attendance of every active person on a date (local)."""
         def load():
             people = self.people()
-            today = datetime.now(_local_tz()).date()
             rows = self.db.query("SELECT employee_id, day_type, leave_reason, check_in, check_out, status "
-                                 "FROM attendance_logs WHERE attendance_date=%s", (today,))
+                                 "FROM attendance_logs WHERE attendance_date=%s", (on,))
             by_emp = {int(r["employee_id"]): r for r in rows}
             days = []
             for eid, p in people.items():
@@ -151,7 +154,7 @@ class Bot:
                 days.append(Day(p, r.get("day_type") or "present", _utc(r.get("check_in")),
                                 _utc(r.get("check_out")), r.get("status") or "", r.get("leave_reason") or ""))
             return days
-        return self._cached("today", load)
+        return self._cached(f"day:{on}", load)
 
     def day_for(self, person: Person) -> Day | None:
         return next((d for d in self.today() if d.person.employee_id == person.employee_id), None)

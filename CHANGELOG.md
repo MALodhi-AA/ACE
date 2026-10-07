@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.2 - 2026-10-08
+Questions about other days, and a fix for "My AI model is not available right now (BadRequestError)".
+- Attendance for any day: "who checked in late yesterday?", "attendance on Monday", "who was absent
+  on 5 Oct". Past days say "Did not check in" instead of "Not checked in yet".
+- Full AI fix: when the model replies with a thinking block or an empty text block before using a
+  tool, ACE now sends it back exactly as the API requires (a changed thinking block or an empty text
+  block is refused with 400 BadRequest).
+- When the AI does fail, ACE now says why (e.g. "model not found", "credit balance too low") instead
+  of only the error name.
+- Docker image is now tagged with the real version (it still said 0.7.0).
+
 ## 0.7.1 - 2026-10-07
 Fix: ACE stopped saving files in a channel after a message was deleted.
 - Chat answers "post not found" (402) for any request anchored on a deleted message. If the

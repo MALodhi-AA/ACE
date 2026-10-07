@@ -667,9 +667,13 @@ Today is {now():%A %d %B %Y}. Their open tasks:
         p = self.bot.people().get(int(emp_id or 0)) if self.bot else None
         return display_name(p.name) if p else f"employee {emp_id}"
 
-    def attendance_lines(self) -> list[str]:
+    def attendance_lines(self, on: date | None = None) -> list[str]:
         from integrations.attendance.reader import fmt_local
-        days = self.bot.today()
+        today = now().date()
+        on = on or today
+        past = on < today
+        days = self.bot.day(on) if past else self.bot.today()
+        when = "today" if not past else ("yesterday" if on == today - timedelta(days=1) else f"on {on:%a %d %b %Y}")
         present = [d for d in days if d.check_in]
         in_now = [d for d in days if d.in_office]
         late = sorted((d for d in present if d.late_minutes > 0), key=lambda d: -d.late_minutes)
@@ -677,7 +681,11 @@ Today is {now():%A %d %B %Y}. Their open tasks:
         absent = [d for d in days if d.day_type == "absent"]
         missing = [d for d in days if d.day_type in ("none", "present") and not d.check_in]
         nm = lambda d: display_name(d.person.name)  # noqa: E731
-        out = [f"Attendance: {len(present)} of {len(days)} checked in today, {len(in_now)} in now"]
+        out = [f"Attendance {when}: {len(present)} of {len(days)} checked in"
+               + ("" if past else f", {len(in_now)} in now")]
+        if past and not present and not leave and not absent:
+            out.append("No attendance records for that day (holiday or weekend?).")
+            return out
         if late:
             out.append("Late: " + ", ".join(f"{nm(d)} ({fmt_local(d.check_in, d.person.tz)}, +{d.late_minutes} min)"
                                             for d in late))
@@ -686,12 +694,12 @@ Today is {now():%A %d %B %Y}. Their open tasks:
         if absent:
             out.append("Absent: " + ", ".join(nm(d) for d in absent))
         if missing:
-            out.append("Not checked in yet: " + ", ".join(nm(d) for d in missing))
+            out.append(("Did not check in: " if past else "Not checked in yet: ") + ", ".join(nm(d) for d in missing))
         return out
 
-    def attendance_text(self) -> str:
+    def attendance_text(self, on: date | None = None) -> str:
         try:
-            return "\n".join(self.attendance_lines())
+            return "\n".join(self.attendance_lines(on))
         except Exception as exc:  # noqa: BLE001
             return f"I couldn't read the attendance system: {exc}"
 

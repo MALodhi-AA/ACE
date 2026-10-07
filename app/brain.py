@@ -36,8 +36,9 @@ BUILTIN = {"help", "hi", "hello", "menu", "?", "status", "skills", "files", "inb
 
 # --- tools -----------------------------------------------------------------------------
 TOOLS = [
-    {"name": "attendance_today", "description": "Today's attendance: who checked in (time), who is late, on leave, "
-     "absent or not checked in yet.", "input_schema": {"type": "object", "properties": {}}},
+    {"name": "attendance_today", "description": "Attendance for a day (default today): who checked in (time), who was "
+     "late (minutes), on leave, absent or did not check in. date: 'today', 'yesterday', a weekday name or YYYY-MM-DD.",
+     "input_schema": {"type": "object", "properties": {"date": {"type": "string"}}}},
     {"name": "person_status", "description": "One staff member today: check-in/out, current state, and their open "
      "tasks in the task bot (with status and due dates).",
      "input_schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
@@ -65,6 +66,37 @@ TOOLS = [
 ]
 READ_TOOLS = {"attendance_today", "person_status", "team_tasks", "followups", "followup_detail", "bot_health",
               "client_files"}
+
+
+WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
+def day_from(value, today=None):
+    """'today' / 'yesterday' / 'day before yesterday' / a weekday (latest past one) / a date -> date or None (today)."""
+    from datetime import timedelta
+    from integrations.synology_chat.watcher import parse_date
+    today = today or now().date()
+    v = (value or "").strip().lower()
+    if not v or v in ("today", "now"):
+        return None
+    if "before yesterday" in v:
+        return today - timedelta(days=2)
+    if v == "yesterday":
+        return today - timedelta(days=1)
+    for i, wd in enumerate(WEEKDAYS):
+        if v.startswith(wd[:3]) and (v in (wd, wd[:3], "last " + wd) or v.startswith(wd)):
+            back = (today.weekday() - i) % 7 or 7
+            return today - timedelta(days=back)
+    try:
+        from datetime import date
+        d = date.fromisoformat(v)
+    except ValueError:
+        d = parse_date(v)
+    if d is None:
+        raise ValueError(f"I couldn't read the date '{value}'. Try yesterday, Monday or 2026-10-05.")
+    if d > today:
+        raise ValueError(f"{d:%d %b %Y} is in the future.")
+    return None if d == today else d
 
 
 def normalize(text: str) -> str:
@@ -140,7 +172,11 @@ class Brain:
         if name in ("attendance_today", "person_status", "team_tasks", "bot_health") and not a.bot:
             return "The attendance + task bot is not connected."
         if name == "attendance_today":
-            return a.attendance_text()
+            try:
+                on = day_from(args.get("date"))
+            except ValueError as exc:
+                return str(exc)
+            return a.attendance_text(on)
         if name == "person_status":
             return a.person_text(args.get("name", ""))
         if name == "team_tasks":
@@ -318,7 +354,7 @@ class Brain:
                     if ctx.get("drafted"):
                         return ""                              # the draft itself was the reply
                     return answer or "I couldn't find an answer to that."
-                messages.append({"role": "assistant", "content": [self._block(b) for b in blocks]})
+                messages.append({"role": "assistant", "content": [x for x in map(self._block, blocks) if x]})
                 results = []
                 for c in calls:
                     used.append(c.name)
@@ -331,13 +367,35 @@ class Brain:
             return "That needed too many steps - please ask in a simpler way."
         except Exception as exc:  # noqa: BLE001
             log.warning("full AI failed: %s", exc)
-            return f"My AI model is not available right now ({type(exc).__name__})."
+            return f"My AI model is not available right now ({type(exc).__name__}: {_api_reason(exc)})."
 
     @staticmethod
-    def _block(b) -> dict:
-        if getattr(b, "type", "") == "tool_use":
+    def _block(b) -> dict | None:
+        """The model's reply block as it must be sent back. Thinking blocks are kept exactly (with their
+        signature); empty text blocks are dropped - the API refuses both a changed thinking block and an
+        empty text block (400 BadRequest)."""
+        kind = getattr(b, "type", "")
+        if kind == "tool_use":
             return {"type": "tool_use", "id": b.id, "name": b.name, "input": b.input}
-        return {"type": "text", "text": getattr(b, "text", "")}
+        if kind == "text":
+            text = getattr(b, "text", "") or ""
+            return {"type": "text", "text": text} if text.strip() else None
+        if kind == "thinking":
+            return {"type": "thinking", "thinking": getattr(b, "thinking", ""), "signature": getattr(b, "signature", "")}
+        if kind == "redacted_thinking":
+            return {"type": "redacted_thinking", "data": getattr(b, "data", "")}
+        dump = getattr(b, "model_dump", None)
+        return dump(exclude_none=True) if dump else None
+
+
+def _api_reason(exc) -> str:
+    """Short reason from an Anthropic API error (e.g. 'model: not found', 'credit balance is too low')."""
+    body = getattr(exc, "body", None)
+    msg = ""
+    if isinstance(body, dict):
+        msg = (body.get("error") or {}).get("message") or ""
+    msg = msg or str(exc)
+    return " ".join(msg.split())[:160]
 
 
 def is_builtin(text: str) -> bool:
