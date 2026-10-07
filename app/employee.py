@@ -107,6 +107,16 @@ def status_text(check_ai: bool = True) -> str:
                 ok, note = nas.is_dir(settings.ace_share, ["reports"]), f" ({settings.ace_share}/reports)"
             else:
                 ok, note = settings.reports_dir.exists(), ""
+        elif kind == "attendance":
+            from integrations.attendance.db import configured as att_configured
+            if att_configured():
+                try:
+                    from integrations.attendance.reader import Bot
+                    ok, note = True, f" ({len(Bot().people())} staff, read-only)"
+                except Exception as exc:  # noqa: BLE001
+                    ok, note = False, f" ({type(exc).__name__})"
+            else:
+                ok, note = False, " (not configured)"
         else:
             ok, note = False, ""
         lines.append(f"{sysdef['label']} {_tick(ok)}{note}")
@@ -146,6 +156,8 @@ def help_text() -> str:
         "  I show you what I understood; reply OK to send, a correction, or cancel.",
         "  tasks - open tasks | task T-12 - details | remind / close / cancel / pause / resume T-12",
         "  approve T-12 / reject T-12 - extension requests | digest - today's summary now",
+        "  who is in - today's attendance | what is Ali working on? | bot tasks - team tasks",
+        "  bot errors - task bot delivery problems (attendance details are for you only)",
         "Staff: reply 'done', ask for more time, say what is blocking you, or",
         f"  'tell {MANAGER} ...' to pass a message.",
         "",

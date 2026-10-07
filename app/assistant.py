@@ -72,10 +72,15 @@ def follow_text(t: dict) -> str:
 
 
 class Assistant:
-    def __init__(self, chat, store: TaskStore | None = None, ask_model=None) -> None:
-        """`chat`: the channel watcher (post, find_channel, username, directory, channels)."""
+    def __init__(self, chat, store: TaskStore | None = None, ask_model=None, bot=None) -> None:
+        """`chat`: the channel watcher (post, find_channel, username, directory, channels).
+        `bot`: read-only view of the attendance + task bot (None if not configured)."""
         self.chat = chat
         self.store = store or TaskStore()
+        if bot is None:
+            from integrations.attendance.reader import Bot
+            bot = Bot() if Bot.available() else None
+        self.bot = bot
         self.hours = Hours.from_settings()
         self._model = ask_model or self._ask_model
         self._last_tick: datetime | None = None
@@ -100,6 +105,16 @@ class Assistant:
 
     def dm(self, uid) -> int | None:
         return self.store.get_meta("dm", {}).get(str(uid))
+
+    def in_office(self, uid) -> bool | None:
+        """From the attendance bot: True/False, None if unknown (not connected / not in its staff list)."""
+        if not self.bot:
+            return None
+        try:
+            return self.bot.in_office(uid, self.chat.username(uid))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("attendance check failed: %s", exc)
+            return None
 
     def to_manager(self, text: str) -> bool:
         """Message every admin privately (needs one message from them to ACE first)."""
@@ -181,6 +196,20 @@ class Assistant:
             return True
         if re.match(r"^\s*digest\b", low):
             say(self.digest_text())
+            return True
+        if self.bot and re.match(r"^\s*(who(\s+is|'s)\s+in|attendance|team(\s+today)?|who\s+is\s+(absent|late))\b", low):
+            say(self.attendance_text())
+            return True
+        if self.bot and re.match(r"^\s*(bot\s+errors?|delivery\s+(errors?|failures?)|bot\s+health)\b", low):
+            say(self.failures_text())
+            return True
+        m2 = re.match(r"^\s*(?:what\s+is\s+|what's\s+)?(.+?)\s+working\s+on\??\s*$", t, re.IGNORECASE) or \
+            re.match(r"^\s*(?:bot\s+)?tasks\s+(?:of|for)\s+(.+?)\s*$", t, re.IGNORECASE)
+        if self.bot and m2:
+            say(self.person_text(m2.group(1)))
+            return True
+        if self.bot and re.match(r"^\s*(bot\s+tasks|overdue(\s+tasks)?|team\s+tasks)\b", low):
+            say(self.bot_tasks_text())
             return True
         m = re.match(r"^\s*(task|show|cancel|close|done|complete|approve|reject|remind|pause|resume)\s+(?:task\s+)?T-?\d+",
                      t, re.IGNORECASE)
@@ -302,13 +331,19 @@ Channels ACE is in: {channels}"""
             escalate_at=datetime.fromisoformat(esc).replace(tzinfo=tz()).isoformat() if esc else None,
             created_by=by)
         if p.get("when") == "checkin":
-            # v0.5: attendance not connected yet - deliver at the start of working hours
-            send_at = self.hours.next_open(now())
-            if send_at > now() + timedelta(minutes=1):
-                self.store.update(task["id"], next_remind_at=send_at.isoformat(), reminders=-1)
-                audit("task_created", task=ref(task["id"]), deliver_at=send_at.isoformat())
-                return (f"{ref(task['id'])} saved. Attendance isn't connected yet, so I'll send it when "
-                        f"working hours start ({fmt_dt(send_at.isoformat())}).")
+            here = self.in_office(task["assignee_id"])
+            if here is False:
+                self.store.update(task["id"], wait_checkin=1, reminders=-1, next_remind_at=now().isoformat())
+                audit("task_created", task=ref(task["id"]), deliver="on check-in")
+                return (f"{ref(task['id'])} saved. {task['assignee_name']} hasn't checked in yet - I'll send it "
+                        "as soon as they do.")
+            if here is None:
+                send_at = self.hours.next_open(now())
+                if send_at > now() + timedelta(minutes=1):
+                    self.store.update(task["id"], next_remind_at=send_at.isoformat(), reminders=-1)
+                    audit("task_created", task=ref(task["id"]), deliver_at=send_at.isoformat())
+                    return (f"{ref(task['id'])} saved. I can't see {task['assignee_name']} in the attendance "
+                            f"system, so I'll send it when working hours start ({fmt_dt(send_at.isoformat())}).")
         ok = self._deliver(task)
         audit("task_created", task=ref(task["id"]), assignee=task["assignee_id"], sent=ok)
         if not ok:
@@ -485,10 +520,14 @@ Today is {now():%A %d %B %Y}. Their open tasks:
     def _tick_task(self, t: dict, t0: datetime) -> None:
         if t["paused"]:
             return
-        if t["next_remind_at"] and datetime.fromisoformat(t["next_remind_at"]) <= t0 and self.hours.is_open(t0):
+        if t["next_remind_at"] and datetime.fromisoformat(t["next_remind_at"]) <= t0:
+            here = self.in_office(t["assignee_id"])
+            # with attendance: only while the person is checked in; without: within working hours
+            ok_now = here if here is not None else (self.hours.is_open(t0) and not t.get("wait_checkin"))
             if not t["sent_at"]:
-                self._deliver(t)                       # held until working hours
-            else:
+                if ok_now or (here is None and t.get("wait_checkin") and self.hours.is_open(t0)):
+                    self._deliver(t)                   # held until check-in / working hours
+            elif ok_now:
                 self._remind(t)
         if t["escalate_at"] and not t["escalated"] and datetime.fromisoformat(t["escalate_at"]) <= t0:
             self.store.update(t["id"], escalated=1)
@@ -557,6 +596,16 @@ Today is {now():%A %d %B %Y}. Their open tasks:
         done = self.store.events_since(since, ("done",))
         blocked = self.store.events_since(since, ("blocked",))
         lines = [f"Good morning {MANAGER} - {t0:%a %d %b %Y}", ""]
+        if self.bot:
+            try:
+                lines += self.attendance_lines() + [""] + self.bot_task_lines() + [""]
+                f = self.bot.delivery_failures()
+                if f["hour"]:
+                    lines += [f"Warning: the task bot failed to deliver {f['hour']:,} chat messages in the last hour "
+                              f"({f['day']:,} in 24h). Send 'bot errors' for details.", ""]
+            except Exception as exc:  # noqa: BLE001
+                lines += [f"(Attendance / task bot not readable: {exc})", ""]
+            lines.append("My follow-ups:")
 
         def section(title, rows, fmt):
             lines.append(f"{title}: {len(rows)}")
@@ -575,6 +624,104 @@ Today is {now():%A %d %B %Y}. Their open tasks:
             lines.append(f"Files saved from chats since yesterday: {files}")
         return "\n".join(lines)
 
+    # ---------------------------------------------------------------- from the attendance + task bot
+    def _bot_name(self, emp_id) -> str:
+        p = self.bot.people().get(int(emp_id or 0)) if self.bot else None
+        return display_name(p.name) if p else f"employee {emp_id}"
+
+    def attendance_lines(self) -> list[str]:
+        from integrations.attendance.reader import fmt_local
+        days = self.bot.today()
+        present = [d for d in days if d.check_in]
+        in_now = [d for d in days if d.in_office]
+        late = sorted((d for d in present if d.late_minutes > 0), key=lambda d: -d.late_minutes)
+        leave = [d for d in days if d.day_type == "leave"]
+        absent = [d for d in days if d.day_type == "absent"]
+        missing = [d for d in days if d.day_type in ("none", "present") and not d.check_in]
+        nm = lambda d: display_name(d.person.name)  # noqa: E731
+        out = [f"Attendance: {len(present)} of {len(days)} checked in today, {len(in_now)} in now"]
+        if late:
+            out.append("Late: " + ", ".join(f"{nm(d)} ({fmt_local(d.check_in, d.person.tz)}, +{d.late_minutes} min)"
+                                            for d in late))
+        if leave:
+            out.append("On leave: " + ", ".join(nm(d) + (f" ({d.leave_reason})" if d.leave_reason else "") for d in leave))
+        if absent:
+            out.append("Absent: " + ", ".join(nm(d) for d in absent))
+        if missing:
+            out.append("Not checked in yet: " + ", ".join(nm(d) for d in missing))
+        return out
+
+    def attendance_text(self) -> str:
+        try:
+            return "\n".join(self.attendance_lines())
+        except Exception as exc:  # noqa: BLE001
+            return f"I couldn't read the attendance system: {exc}"
+
+    def bot_task_lines(self, limit: int = 10) -> list[str]:
+        from integrations.attendance.reader import fmt_due
+        t = self.bot.tasks()
+        row = lambda r: f"{r['task_code']} {r['title'][:70]} - {self._bot_name(r['emp'])} (due {fmt_due(r['due'])})"  # noqa: E731
+        out = [f"Team tasks (task bot): {len(t['open'])} open, {len(t['overdue'])} overdue, "
+               f"{len(t['due_today'])} due today, {len(t['completed'])} completed in the last 24h"]
+        sections = [("Overdue", t["overdue"]), ("Blocked", t["blocked"]),
+                    ("ETA waiting for approval", t["eta_waiting"]),
+                    ("Extension requests waiting", t["ext_waiting"]),
+                    ("Submitted, waiting for review", t["submitted"]),
+                    ("New tasks waiting for approval", t["create_waiting"])]
+        for title, rows in sections:
+            if rows:
+                out.append(f"{title}: {len(rows)}")
+                out.extend(f"- {row(r)}" for r in sorted(rows, key=lambda r: r["due"] or datetime.max.replace(
+                    tzinfo=tz()))[:limit])
+                if len(rows) > limit:
+                    out.append(f"- ... and {len(rows) - limit} more")
+        return out
+
+    def bot_tasks_text(self) -> str:
+        try:
+            return "\n".join(self.bot_task_lines(limit=25))
+        except Exception as exc:  # noqa: BLE001
+            return f"I couldn't read the task bot: {exc}"
+
+    def person_text(self, who: str) -> str:
+        from integrations.attendance.reader import fmt_due, fmt_local
+        uid = self.resolve_user(who, {})
+        p = self.bot.person_for_chat(uid or "", self.chat.username(uid) if uid else who)
+        if not p:
+            low = who.strip().lower()
+            p = next((x for x in self.bot.people().values() if low and low in x.name.lower()), None)
+        if not p:
+            return f"I can't find '{who}' in the attendance system."
+        d = self.bot.day_for(p)
+        if d and d.check_in:
+            state = (f"checked in {fmt_local(d.check_in, p.tz)}" + (f" (+{d.late_minutes} min late)" if d.late_minutes else "")
+                     + (f", checked out {fmt_local(d.check_out, p.tz)}" if d.check_out else f", now {d.status or 'working'}"))
+        else:
+            state = {"leave": "on leave", "absent": "absent"}.get(d.day_type if d else "", "not checked in yet")
+        rows = self.bot.tasks_of(p)
+        out = [f"{display_name(p.name)} today: {state}", f"Open tasks in the task bot: {len(rows)}"]
+        for r in sorted(rows, key=lambda r: r["due"] or datetime.max.replace(tzinfo=tz()))[:15]:
+            out.append(f"- {r['task_code']} {r['title'][:80]} - {r['status']} (due {fmt_due(r['due'])})")
+        mine = [t for t in self.store.open_tasks() if self.bot.person_for_chat(t["assignee_id"], t["assignee_name"]) == p]
+        if mine:
+            out.append(f"My follow-ups with them: " + ", ".join(f"{ref(t['id'])} {t['title']}" for t in mine))
+        return "\n".join(out)
+
+    def failures_text(self) -> str:
+        try:
+            f = self.bot.delivery_failures()
+        except Exception as exc:  # noqa: BLE001
+            return f"I couldn't read the task bot's delivery log: {exc}"
+        if not f["hour"] and not f["day"]:
+            return "Task bot: no failed chat deliveries in the last 24 hours."
+        out = [f"Task bot - failed chat deliveries: {f['hour']:,} in the last hour, {f['day']:,} in 24 hours"]
+        if f["top"]:
+            out.append("Most common errors (last hour):")
+            out.extend(f"- {r['n']:,} x {r['source'] or '?'}: {(r['error'] or '').strip()}" for r in f["top"])
+        if f["channels"]:
+            out.append("Channels most affected: " + ", ".join(f"{r['channel'] or '?'} ({r['n']:,})" for r in f["channels"]))
+        return "\n".join(out)
+
     def _title(self, tid: int) -> str:
         t = self.store.get(tid)
         return t["title"] if t else ""
@@ -585,6 +732,15 @@ Today is {now():%A %d %B %Y}. Their open tasks:
         late = sum(1 for t in tasks if t["due"] and date.fromisoformat(t["due"]) < today)
         dm_ok = any(self.dm(a) for a in settings.ace_admins)
         staff = len(self.chat.directory())
-        return (f"Tasks: {len(tasks)} open, {late} overdue; digest {settings.digest_time:%H:%M} "
+        att = ""
+        if self.bot:
+            try:
+                people = self.bot.people()
+                known = {str(u) for u in self.chat.directory()} | {str(n).lower() for n in self.chat.directory().values()}
+                matched = sum(1 for p in people.values() if p.chat_ref in known or p.chat_username.lower() in known)
+                att = f"\nAttendance + task bot ✓ - {len(people)} staff, {matched} matched to Chat users"
+            except Exception as exc:  # noqa: BLE001
+                att = f"\nAttendance + task bot ✗ - {exc}"
+        return att.lstrip("\n") + ("\n" if att else "") + (f"Tasks: {len(tasks)} open, {late} overdue; digest {settings.digest_time:%H:%M} "
                 f"{'✓' if dm_ok else '(send me any direct message once so I can reach you)'}; "
                 f"staff list: {staff} people" + ("" if staff else " - use @mentions in instructions"))

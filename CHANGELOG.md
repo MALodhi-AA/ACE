@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0 - 2026-10-07
+Attendance + task bot connected (read-only).
+- ACE reads the attendance + task bot's MariaDB (employees, attendance_logs, tasks,
+  chat_delivery_failures) with its read-only login. Staff are matched to Chat users by
+  `synology_user_ref` / `chat_username`. Times in that database are treated as UTC.
+- "ask him when he checks in": the message is held and sent as soon as the person's
+  check-in appears. Follow-ups go out only while the person is checked in (not on leave,
+  absent, before check-in or after check-out). Without attendance data: working hours.
+- Morning digest now starts with attendance (checked in, in now, late vs. shift start and
+  grace, on leave, absent, not checked in yet) and the task bot's team tasks (overdue,
+  blocked, ETAs / extensions / new tasks waiting for approval, submitted for review,
+  completed in 24h), plus a warning when the bot is failing to deliver chat messages.
+- New commands for Sir Muhammad Ali: `who is in`, `what is <name> working on?`,
+  `bot tasks`, `bot errors`. Attendance details are never shown to staff.
+- Probe: `python -m integrations.attendance.probe --errors` summarises the bot's failed
+  deliveries. `status` shows how many of the bot's staff are matched to Chat users.
+
 ## 0.5.2 - 2026-10-07
 - Attendance database (step 1 of v0.6): read-only MariaDB client
   (`integrations/attendance/db.py`; read-only session, only SELECT/SHOW allowed) and a probe

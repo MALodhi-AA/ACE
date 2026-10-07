@@ -6,7 +6,7 @@
 name: ACE
 handle: ACE
 full_name: Accountability's Chief Examiner
-version: 0.5.2
+version: 0.6.0
 role: Financial Reporting Analyst
 organisation: Accountability Accountants
 
@@ -57,8 +57,8 @@ systems:
     label: Finance DB
     kind: planned
   - key: attendance
-    label: Attendance DB
-    kind: planned
+    label: Attendance + task bot
+    kind: attendance
 
 # House style used when the employee answers questions in chat.
 persona: |

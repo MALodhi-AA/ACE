@@ -135,6 +135,11 @@ class TaskStore:
         self.db = sqlite3.connect(str(self.path), check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        for col in ("wait_checkin INTEGER NOT NULL DEFAULT 0",):          # added in v0.6
+            try:
+                self.db.execute(f"ALTER TABLE tasks ADD COLUMN {col}")
+            except sqlite3.OperationalError:
+                pass
         self.db.commit()
 
     def _row(self, r) -> dict | None:

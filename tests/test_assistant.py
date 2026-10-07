@@ -231,3 +231,154 @@ def test_hours_helpers():
     assert T.next_reminder(t, datetime(2026, 10, 7, 11, 0, tzinfo=TZ), h) == datetime(2026, 10, 9, 9, 0, tzinfo=TZ)
     assert T.parse_ref("approve t-12") == 12
     assert timedelta(0) <= timedelta(0)
+
+
+# --- v0.6: attendance + task bot (read-only) ------------------------------------------
+from datetime import timezone  # noqa: E402
+
+from integrations.attendance.reader import Bot  # noqa: E402
+
+UTC = timezone.utc
+
+
+class FakeAttendanceDB:
+    """Answers the reader's SELECTs from in-memory rows (like attendance_db on the DS723+)."""
+
+    def __init__(self):
+        self.employees = [
+            {"id": 1, "name": "Muhammad Ali Lodhi", "chat_username": "ma", "synology_user_ref": "7",
+             "timezone": "Asia/Dubai", "shift_start": timedelta(hours=11), "grace_minutes": 10,
+             "reports_to_employee_id": None},
+            {"id": 2, "name": "Ali", "chat_username": "ali", "synology_user_ref": "8",
+             "timezone": "Asia/Dubai", "shift_start": timedelta(hours=11), "grace_minutes": 10,
+             "reports_to_employee_id": 1},
+            {"id": 3, "name": "Amir Hussain", "chat_username": "amir", "synology_user_ref": "9",
+             "timezone": "Asia/Karachi", "shift_start": timedelta(hours=9), "grace_minutes": 0,
+             "reports_to_employee_id": 1},
+        ]
+        self.logs = {}           # employee_id -> row
+        self.tasks = []
+        self.failures = {"hour": 0, "day": 0}
+        self.queries = []
+
+    def query(self, sql, args=None):
+        self.queries.append(sql)
+        assert sql.lstrip().upper().startswith("SELECT")
+        if "FROM employees" in sql:
+            return [dict(e) for e in self.employees]
+        if "FROM attendance_logs" in sql:
+            return [dict(r, employee_id=k) for k, r in self.logs.items()]
+        if "FROM tasks" in sql:
+            if "status='completed'" in sql:
+                return [dict(t) for t in self.tasks if t["status"] == "completed"]
+            if "creation_approval_status='pending'" in sql:
+                return [dict(t) for t in self.tasks if t.get("cstat") == "pending"]
+            return [dict(t) for t in self.tasks if t["status"] not in ("completed", "cancelled")]
+        if "chat_delivery_failures" in sql:
+            if "COUNT(*) AS n FROM" in sql and "GROUP BY" not in sql:
+                return [{"n": self.failures["day" if "86400" in str(args) or len(self.queries) % 2 == 0 else "hour"]}]
+            if "GROUP BY LEFT(error" in sql:
+                return [{"error": "create post too fast", "source": "reminder", "n": 40000, "last": None}] \
+                    if self.failures["hour"] else []
+            return [{"channel": "Mara-Daily-Work", "n": 40000}] if self.failures["hour"] else []
+        raise AssertionError(sql)
+
+
+def bot_task(code, title, emp, status="in_progress", due=None, **kw):
+    return {"task_code": code, "title": title, "status": status, "priority": "normal", "emp": emp, "due": due,
+            "eta_status": kw.get("eta_status", "approved"), "eta": None,
+            "extension_status": kw.get("extension_status", "none"), "ext_due": None,
+            "cstat": kw.get("cstat", "approved"), "done_at": kw.get("done_at"), "channel_name": "x"}
+
+
+@pytest.fixture
+def office_att(office, monkeypatch):
+    chat, w, replies, clock, say = office
+    db = FakeAttendanceDB()
+    bot = Bot(db=db, cache_seconds=0)
+    w.assistant.bot = bot
+    import integrations.attendance.reader as R
+
+    class FixedDT(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock.t.astimezone(tz) if tz else clock.t.replace(tzinfo=None)
+
+    monkeypatch.setattr(R, "datetime", FixedDT)
+    return chat, w, replies, clock, say, db
+
+
+def check_in(db, emp, at_local):
+    db.logs[emp] = {"day_type": "present", "leave_reason": None,
+                    "check_in": at_local.astimezone(UTC).replace(tzinfo=None), "check_out": None, "status": "working"}
+
+
+def test_send_when_checked_in(office_att):
+    chat, w, replies, clock, say, db = office_att
+    say(ALI, "hi")
+    replies["next"] = parsed(when="checkin")
+    say(MA, "ask Ali when he checks in to send the Mara VAT working by Friday")
+    say(MA, "ok")
+    assert "hasn't checked in yet - I'll send it as soon as they do" in last_to(chat, DM_MA)
+    before = len([1 for c, _, _ in chat.sent if c == DM_ALI])
+    clock.t = datetime(2026, 10, 7, 11, 30, tzinfo=TZ)
+    w.assistant.tick(force=True)
+    assert len([1 for c, _, _ in chat.sent if c == DM_ALI]) == before          # still not in
+    check_in(db, 2, datetime(2026, 10, 7, 11, 40, tzinfo=TZ))
+    clock.t = datetime(2026, 10, 7, 11, 41, tzinfo=TZ)
+    w.assistant.tick(force=True)
+    assert "Sir Muhammad Ali has asked" in last_to(chat, DM_ALI)
+
+
+def test_reminders_only_while_checked_in(office_att):
+    chat, w, replies, clock, say, db = office_att
+    say(ALI, "hi")
+    replies["next"] = parsed(follow_up={"mode": "hours", "every_hours": 1})
+    say(MA, "ask Ali for the Mara VAT working, remind every hour")
+    say(MA, "ok")
+    n = lambda: len([1 for c, _, t in chat.sent if c == DM_ALI and t.startswith("Reminder")])  # noqa: E731
+    clock.t = datetime(2026, 10, 7, 13, 0, tzinfo=TZ)
+    w.assistant.tick(force=True)
+    assert n() == 0                                          # Ali not checked in today
+    check_in(db, 2, datetime(2026, 10, 7, 12, 55, tzinfo=TZ))
+    w.assistant.tick(force=True)
+    assert n() == 1
+
+
+def test_attendance_and_team_tasks_in_digest_and_commands(office_att):
+    chat, w, replies, clock, say, db = office_att
+    say(MA, "hi")
+    check_in(db, 1, datetime(2026, 10, 7, 10, 55, tzinfo=TZ))
+    check_in(db, 2, datetime(2026, 10, 7, 11, 42, tzinfo=TZ))                 # 42 min after shift start (grace 10)
+    db.logs[3] = {"day_type": "leave", "leave_reason": "sick", "check_in": None, "check_out": None, "status": ""}
+    past = datetime(2026, 10, 5, 12, 0, tzinfo=UTC).replace(tzinfo=None)
+    db.tasks = [bot_task("T2610-001", "Mara Q3 VAT return", 2, status="overdue", due=past),
+                bot_task("T2610-002", "Volt bank rec", 3, extension_status="pending"),
+                bot_task("T2610-003", "Food Box MIS", 2, status="blocked")]
+    say(MA, "who is in")
+    a = last_to(chat, DM_MA)
+    assert "Attendance: 2 of 3 checked in today" in a and "Late: Ali (11:42, +42 min)" in a
+    assert "On leave: Sir Amir Hussain (sick)" in a
+    say(MA, "what is Ali working on?")
+    p = last_to(chat, DM_MA)
+    assert p.startswith("Ali today: checked in 11:42 (+42 min late)") and "T2610-001 Mara Q3 VAT return - overdue" in p
+    db.failures = {"hour": 40000, "day": 900000}
+    d = w.assistant.digest_text()
+    assert "Team tasks (task bot): 3 open, 1 overdue" in d and "Extension requests waiting: 1" in d
+    assert "Warning: the task bot failed to deliver" in d and "My follow-ups:" in d
+    say(MA, "bot errors")
+    assert "create post too fast" in last_to(chat, DM_MA)
+
+
+def test_staff_cannot_see_attendance(office_att):
+    chat, w, replies, clock, say, db = office_att
+    replies["next"] = lambda s, u: {"kind": "other"}
+    say(ALI, "who is in")
+    assert "Attendance:" not in last_to(chat, DM_ALI)
+
+
+def test_reader_never_writes():
+    db = FakeAttendanceDB()
+    bot = Bot(db=db, cache_seconds=0)
+    bot.people(); bot.today(); bot.tasks(); bot.delivery_failures()
+    assert all(q.lstrip().upper().startswith("SELECT") for q in db.queries)

@@ -23,6 +23,7 @@ TIME_TYPES = {"date", "datetime", "timestamp", "time"}
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", help="only this database")
+    ap.add_argument("--errors", action="store_true", help="summary of the task bot's failed chat deliveries")
     args = ap.parse_args()
     cfg = settings_from_env()
     if not configured():
@@ -43,6 +44,15 @@ def main() -> int:
         print(f"CONNECTION FAILED: {msg}{hint}")
         return 1
     print("CONNECTED (read-only session)")
+    if args.errors:
+        from integrations.attendance.reader import Bot
+        f = Bot(db=AttendanceDB()).delivery_failures()
+        print(f"\nFailed chat deliveries: {f['hour']:,} in the last hour, {f['day']:,} in 24 hours")
+        for r in f["top"]:
+            print(f"  {r['n']:>8,} x {r['source'] or '?'}: {(r['error'] or '').strip()}")
+        for r in f["channels"]:
+            print(f"  channel {r['channel'] or '?'}: {r['n']:,}")
+        return 0
     for g in db.query("SHOW GRANTS"):
         grant = list(g.values())[0]
         print(f"  grant: {grant.split(' IDENTIFIED')[0]}")
