@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.config import settings
+from app.profile import MANAGER
 
 log = logging.getLogger(__name__)
 
@@ -243,7 +244,7 @@ class NasClient:
         where = "/".join([share, *parts])
         if "ACCESS_DENIED" in text or "0xc0000022" in text:
             return (f"I don't have {'write' if writing else 'read'} permission for '{where}'. "
-                    "Ask MA to give the `ace` account access in DSM.")
+                    f"Ask {MANAGER} to give the `ace` account access in DSM.")
         if "OBJECT_NAME_NOT_FOUND" in text or "OBJECT_PATH_NOT_FOUND" in text or "BAD_NETWORK_NAME" in text:
             return f"'{where}' was not found on the NAS."
         if isinstance(exc, NasError):

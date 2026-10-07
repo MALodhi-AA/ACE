@@ -417,7 +417,7 @@ def test_collect_needs_admin(history, monkeypatch):
     chat.new(msg(CID, 7, "@u:189 collect files", mentions=[189]))
     chat.me = 189
     w.poll_once()
-    assert "Only my manager" in chat.sent[-1][2]
+    assert "Only Sir Muhammad Ali can" in chat.sent[-1][2]
     assert not root.exists()
 
 

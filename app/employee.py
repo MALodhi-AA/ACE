@@ -27,7 +27,7 @@ from skills.registry import SKILLS, by_command
 
 log = logging.getLogger(__name__)
 
-PROFILE = yaml.safe_load((ROOT_DIR / "config" / "employee.yaml").read_text(encoding="utf-8"))
+from app.profile import MANAGER, PROFILE  # noqa: E402
 STARTED_AT = datetime.now(ZoneInfo(settings.timezone))
 
 # short per-user conversation memory for `ask` (in memory; resets on restart)
@@ -88,6 +88,7 @@ def status_text(check_ai: bool = True) -> str:
         "",
         "Role:",
         PROFILE["role"],
+        f"Works for: {MANAGER}",
         f"Authority: {PROFILE['authority']['mode'].replace('_', '-')}",
         "",
         "Available Skills:",
@@ -138,7 +139,7 @@ def help_text() -> str:
     for s in SKILLS.values():
         lines.append(f"{s.usage} - {s.name}")
     lines += [
-        "collect files [channel] [period] - manager only: save old files shared in a channel",
+        f"collect files [channel] [period] - {MANAGER} only: save old files shared in a channel",
         "  (incl. threads) into year/month/day folders, e.g. collect files for Oct 2026,",
         "  collect files ACE-TEST from 1 Sep 2026 to 30 Sep 2026, collect files last month",
         "whoami - show your Chat user id (for permissions)",
@@ -196,7 +197,7 @@ def handle(user_id: str, username: str, text: str, channel: str) -> Response:
     if not is_allowed(user_id, username):
         audit("denied", command=cmd, **who)
         return Response(f"Sorry {username or 'there'}, you are not authorised to use {PROFILE['name']}. "
-                        f"Ask MA to add your user id ({user_id}) to ALLOWED_USERS.")
+                        f"Ask {MANAGER} to add your user id ({user_id}) to ALLOWED_USERS.")
 
     audit("request", command=cmd, arg=arg[:200], **who)
 

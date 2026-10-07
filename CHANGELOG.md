@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.10 - 2026-10-07
+- ACE refers to the head of the firm as "Sir Muhammad Ali" everywhere: in answers (AI
+  persona), in its own messages ("Only Sir Muhammad Ali can ...", "Ask Sir Muhammad Ali
+  to ..."), in `status` ("Works for: Sir Muhammad Ali") and in help. The name is set
+  once in `config/employee.yaml` (`manager: name:`).
+
 ## 0.4.9 - 2026-10-07
 - Fix: an empty chat (e.g. a new direct chat with no messages yet) answered "post not
   found" (402) and the error stopped that whole round of checks, so other chats were

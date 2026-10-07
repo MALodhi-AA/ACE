@@ -589,7 +589,8 @@ class ChannelWatcher:
         uid = post.get("creator_id")
         if not self.is_admin(uid):
             audit("denied", command="collect files", user_id=uid)
-            self.say(cid, "Only my manager can ask me to collect old files.", thread)
+            from app.profile import MANAGER
+            self.say(cid, f"Only {MANAGER} can ask me to collect old files.", thread)
             return
         target = self.find_channel(cmd["quoted"]) if cmd["quoted"] else None
         target = target or self.channel_in_text(cmd["text"]) or (self.channel_in_text(cmd["quoted"]) if cmd["quoted"] else None)
