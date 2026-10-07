@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 import httpx
 
@@ -144,41 +145,68 @@ class ChatUser:
         posts = data.get("posts", []) if isinstance(data, dict) else []
         return [p for p in posts if p.get("channel_id") == channel_id]
 
+    def _exists_up_to(self, channel_id: int, n: int) -> list[dict] | None:
+        """Posts around message number n, or None when n is past the channel's last message
+        (Chat answers 'post not found' then). Missing numbers inside the range are fine."""
+        try:
+            return self.posts(channel_id, (channel_id << 32) + n, prev_count=3, next_count=3)
+        except ChatError as exc:
+            if exc.code == 402:
+                return None
+            raise
+
     def first_post(self, channel_id: int) -> dict | None:
-        res = self._ok(self.call("SYNO.Chat.Post", "list", self.POST_VERSION, channel_id=channel_id), "post list")
-        posts = res.get("data", {}).get("posts", [])
-        return posts[0] if posts else None
+        """Oldest message of a channel. (Asking without an anchor is unreliable - some channels
+        answer with nothing - so ask from message number 1 onwards.)"""
+        for n in (1, 2, 3):
+            posts = self._exists_up_to(channel_id, n)
+            if posts is None:
+                return None                      # empty channel
+            if posts:
+                return min(posts, key=lambda p: p["post_id"])
+        posts = self.posts(channel_id, (channel_id << 32) + 1, next_count=50)
+        return min(posts, key=lambda p: p["post_id"]) if posts else None
 
     def latest_post_id(self, channel_id: int, page: int = 200, max_pages: int = 1000) -> int:
-        """Newest post id in a channel (0 if empty)."""
-        # Fast path: anchor at the highest possible id of this channel.
-        top = (channel_id << 32) + 0xFFFFFFFF
-        try:
-            posts = self.posts(channel_id, top, prev_count=1)
-            if posts:
-                return max(p["post_id"] for p in posts)
-        except ChatError:
-            pass
-        # Slow path (once per channel): walk forward from the first post.
-        first = self.first_post(channel_id)
-        if not first:
+        """Newest message id in a channel (0 if empty).
+
+        Binary search on the message number: an anchor past the last message is 'not found',
+        anything up to it works (about 32 quick requests), then step forward to be sure."""
+        if self._exists_up_to(channel_id, 1) is None:
             return 0
-        last = first["post_id"]
+        lo, hi = 1, 0xFFFFFFFF
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if self._exists_up_to(channel_id, mid) is None:
+                hi = mid - 1
+            else:
+                lo = mid
+        posts = self._exists_up_to(channel_id, lo) or []
+        last = max((p["post_id"] for p in posts), default=(channel_id << 32) + lo)
         for _ in range(max_pages):
             newer = [p["post_id"] for p in self.posts(channel_id, last, next_count=page) if p["post_id"] > last]
             if not newer:
                 break
-            last = max(newer)   # keep going until Chat returns nothing newer (it may cap page sizes)
+            last = max(newer)
         return last
+
+    def _create(self, **params) -> dict:
+        """Create a post; wait and retry when Chat says 'create post too fast' (411)."""
+        res: dict = {}
+        for attempt in range(4):
+            res = self.call("SYNO.Chat.Post", "create", self.POST_VERSION, **params)
+            if res.get("success") or res.get("error", {}).get("code") != 411:
+                return res
+            time.sleep(1.5 * (attempt + 1))
+        return res
 
     def send(self, channel_id: int, text: str, thread_id: int | None = None) -> bool:
         """Post a plain-text message (as a thread reply when possible)."""
         res = {}
         if thread_id:
-            res = self.call("SYNO.Chat.Post", "create", self.POST_VERSION, channel_id=channel_id,
-                            message=text, thread_id=thread_id)
+            res = self._create(channel_id=channel_id, message=text, thread_id=thread_id)
         if not res.get("success"):
-            res = self.call("SYNO.Chat.Post", "create", self.POST_VERSION, channel_id=channel_id, message=text)
+            res = self._create(channel_id=channel_id, message=text)
         if not res.get("success"):
             log.warning("Chat post failed: %s", res.get("error"))
             return False

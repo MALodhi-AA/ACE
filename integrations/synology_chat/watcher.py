@@ -228,7 +228,7 @@ class ChannelWatcher:
             self.chat.me = int(me)
 
     # --- state -----------------------------------------------------------------
-    STATE_VERSION = 2
+    STATE_VERSION = 3
 
     def _load(self) -> dict:
         try:
@@ -236,8 +236,8 @@ class ChannelWatcher:
         except (OSError, ValueError):
             return {"_v": self.STATE_VERSION}
         if state.get("_v") != self.STATE_VERSION:
-            # Before v0.4.7 the starting point of big channels could be found too early
-            # (Chat caps page sizes). Start every chat again from its newest message so
+            # Before v0.4.8 the starting point of some channels was found wrongly (Chat caps
+            # page sizes; some channels answer nothing without an anchor). Start every chat again from its newest message so
             # nothing old is answered or saved by itself.
             log.info("channel watcher: state from an older version - starting from the newest messages")
             state = {k: v for k, v in state.items() if k.startswith("_")}
@@ -304,7 +304,8 @@ class ChannelWatcher:
             key = str(cid)
             st = self.state.get(key)
             if st is None:
-                latest = self.chat.latest_post_id(cid)
+                # empty chat: start before message 1 so its first message is handled
+                latest = self.chat.latest_post_id(cid) or (cid << 32)
                 self.state[key] = {"last_id": latest, "last_at": ch.get("last_post_at", 0),
                                    "name": self.folder_name(ch)}
                 self._save()
@@ -331,7 +332,8 @@ class ChannelWatcher:
         cid = int(ch["channel_id"])
         saved = 0
         while True:
-            newer = sorted((p for p in self.chat.posts(cid, st["last_id"], next_count=PAGE)
+            anchor = max(st["last_id"], (cid << 32) + 1)       # Chat needs an anchor of 1 or more
+            newer = sorted((p for p in self.chat.posts(cid, anchor, next_count=PAGE)
                             if p.get("post_id", 0) > st["last_id"]), key=lambda p: p["post_id"])
             if not newer:
                 return saved
@@ -353,7 +355,7 @@ class ChannelWatcher:
         with thread_id=<message> and an anchor before the replies.
         """
         cid = int(ch["channel_id"])
-        if not st.get("last_id"):
+        if st.get("last_id", 0) <= (cid << 32):
             return 0
         recent = sorted(self.chat.posts(cid, st["last_id"], prev_count=RECENT_ROOTS),
                         key=lambda p: p["post_id"])

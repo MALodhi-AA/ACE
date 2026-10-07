@@ -147,21 +147,29 @@ def _client(handler):
 
 
 def test_user_client_relogs_in_and_finds_latest_post():
-    calls = {"login": 0}
+    """Chat answers 'post not found' (402) for an anchor past the last message - binary search."""
+    calls = {"login": 0, "list": 0}
+    last = 9
 
     def handler(request):
         form = dict(x.split("=", 1) for x in request.content.decode().split("&"))
         if form["api"] == "SYNO.API.Auth":
             calls["login"] += 1
             return httpx.Response(200, json={"success": True, "data": {"sid": f"s{calls['login']}"}})
-        if form["api"] == "SYNO.Chat.Post" and form["_sid"] == "s1":
+        if form["_sid"] == "s1":
             return httpx.Response(200, json={"success": False, "error": {"code": 119}})
-        assert form["post_id"] == str(BASE + 0xFFFFFFFF) and form["prev_count"] == "1"
-        return httpx.Response(200, json={"success": True, "data": {"posts": [post(9)]}})
+        calls["list"] += 1
+        n = int(form["post_id"]) - BASE
+        if n > last:
+            return httpx.Response(200, json={"success": False, "error": {"code": 402, "errors": "post not found"}})
+        lo, hi = n - int(form["prev_count"]), n + int(form["next_count"])
+        return httpx.Response(200, json={"success": True, "data": {"posts": [
+            post(i) for i in range(max(1, lo), min(last, hi) + 1)]}})
 
     c = _client(handler)
     assert c.latest_post_id(CID) == BASE + 9
-    assert calls["login"] == 2
+    assert calls["login"] == 2 and calls["list"] < 45
+    assert c.first_post(CID)["post_id"] == BASE + 1
 
 
 def test_user_client_reports_login_problem():
@@ -453,3 +461,21 @@ def test_old_state_is_rebaselined(tmp_path):
     w = ChannelWatcher(chat, store=LocalStore(tmp_path / "f"), state_path=tmp_path / "s.json", tz="Asia/Dubai")
     assert w.poll_once() == 0 and w.state[str(CID)]["last_id"] == BASE + 3     # old.pdf not saved
     assert w.state["_me"] == {"id": 189}
+
+
+def test_send_waits_when_chat_says_too_fast(monkeypatch):
+    import integrations.synology_chat.user_client as uc
+    monkeypatch.setattr(uc.time, "sleep", lambda s: None)
+    tries = {"n": 0}
+
+    def handler(request):
+        form = dict(x.split("=", 1) for x in request.content.decode().split("&"))
+        if form["api"] == "SYNO.API.Auth":
+            return httpx.Response(200, json={"success": True, "data": {"sid": "s"}})
+        tries["n"] += 1
+        if tries["n"] < 3:
+            return httpx.Response(200, json={"success": False, "error": {"code": 411, "errors": "create post too fast"}})
+        return httpx.Response(200, json={"success": True, "data": {"creator_id": 189}})
+
+    c = _client(handler)
+    assert c.send(CID, "Done") is True and tries["n"] == 3 and c.me == 189

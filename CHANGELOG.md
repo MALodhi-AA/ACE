@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.8 - 2026-10-07
+- Fix: in some channels (e.g. PaymentTracker-MaraGroup) Chat returns nothing when asked
+  for the first message without an anchor, so ACE thought the channel was empty
+  ("from post 0", "checked 0"). ACE now asks from message number 1 onwards, and finds the
+  newest message with a quick binary search (Chat answers "post not found" past the end).
+- Fix: replies sent right after each other were refused by Chat ("create post too fast",
+  e.g. the "Done" message of `collect files`). ACE now waits and retries.
+- Every chat starts again from its newest message after this update.
+
 ## 0.4.7 - 2026-10-07
 - Fix: Chat returns fewer messages per request than ACE asks for, and ACE took a short
   page as "end of history". `collect files` therefore only read the oldest messages of a
