@@ -37,7 +37,9 @@ from integrations.synology_chat.user_client import ChatError, ChatUser
 log = logging.getLogger(__name__)
 
 CHANNEL_TYPES = {"public", "private"}
-SKIP_TYPES = {"synobot", "anonymous", "chatbot", "bot"}   # everything else = direct conversation
+SKIP_TYPES = {"synobot", "chatbot", "bot"}
+# Synology Chat lists unnamed conversations (one-to-one and small group chats) as
+# type "anonymous": 2 members = direct chat with ACE, more = group conversation.
 PAGE = 100
 MAX_ATTEMPTS = 3
 _BAD_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -46,13 +48,16 @@ _ACE_NAME = re.compile(r"^\s*@?ace\b[:,]?\s*", re.IGNORECASE)
 
 
 def kind(ch: dict) -> str | None:
-    """'channel', 'direct' or None (not handled)."""
+    """'channel', 'direct' (one-to-one with ACE), 'group' (conversation) or None (not handled)."""
     t = str(ch.get("type", "")).lower()
     if t in CHANNEL_TYPES:
         return "channel"
     if t in SKIP_TYPES or not t:
         return None
-    return "direct"
+    members = ch.get("total_member_count")
+    if members is None or int(members) <= 2:
+        return "direct"
+    return "group"
 
 
 def mentions(post: dict, me: int | None) -> bool:
@@ -114,8 +119,9 @@ class ChannelWatcher:
         names = settings.chat_channel_names
         if cid in names:
             return safe_name(names[cid])
-        if kind(ch) == "direct":
-            return safe_name(f"Direct-{ch.get('name') or cid}", f"Direct-{cid}")
+        if kind(ch) in ("direct", "group"):
+            prefix = "Direct" if kind(ch) == "direct" else "Group"
+            return safe_name(f"{prefix}-{ch.get('name') or cid}", f"{prefix}-{cid}")
         return safe_name(ch.get("name") or "", f"channel-{cid}")
 
     def username(self, user_id) -> str:
@@ -150,7 +156,7 @@ class ChannelWatcher:
         if self.stats["day"] != today:
             self.stats.update(day=today, saved_today=0, answered_today=0)
         channels = self.watched(self.chat.channels())
-        self.stats["channels"] = sum(1 for c in channels if kind(c) == "channel")
+        self.stats["channels"] = sum(1 for c in channels if kind(c) != "direct")
         self.stats["direct"] = len(channels) - self.stats["channels"]
         for ch in channels:
             cid = int(ch["channel_id"])
@@ -253,7 +259,7 @@ class ChannelWatcher:
         cid = int(ch["channel_id"])
         uid = str(post.get("creator_id", ""))
         text = clean_text(post.get("message", ""))
-        where = "chat-direct" if kind(ch) == "direct" else f"chat-channel:{self.folder_name(ch)}"
+        where = "chat-direct" if kind(ch) == "direct" else f"chat-{kind(ch)}:{self.folder_name(ch)}"
         thread = post.get("thread_id") or None
         self.stats["answered_today"] += 1
         try:
@@ -343,7 +349,7 @@ def status_line() -> str | None:
         return f"Chat account: starting ✗{err}" if err else "Chat account: starting..."
     s = w.stats
     ok = "✓" if not s["last_error"] else "⚠️"
-    line = (f"Chat account '{settings.chat_user}' {ok} - in {s['channels']} channels and {s['direct']} direct chats; "
+    line = (f"Chat account '{settings.chat_user}' {ok} - in {s['channels']} channels/groups and {s['direct']} direct chats; "
             f"today {s['saved_today']} files saved, {s['answered_today']} messages answered; "
             f"last check {s['last_check']:%H:%M}")
     if s["last_error"]:

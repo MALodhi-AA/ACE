@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.2 - 2026-10-07
+- Fix: direct chats with the ACE user were not seen. Synology Chat lists unnamed
+  conversations as type "anonymous"; with 2 members it is a direct chat (ACE answers
+  every message), with more members a group conversation (ACE answers when @mentioned
+  and saves shared files).
+
 ## 0.4.1 - 2026-10-07
 - ACE talks through its own Chat account too: it answers every direct message sent to
   the ACE user and every channel message that mentions @ACE, with the same commands as

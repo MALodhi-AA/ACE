@@ -172,6 +172,7 @@ def test_user_client_reports_login_problem():
 
 # --- v0.4.1: ACE answers direct messages and @ACE mentions -------------------------
 DM = 300
+GROUP = 301
 
 
 class TalkChat(FakeChat):
@@ -179,7 +180,9 @@ class TalkChat(FakeChat):
 
     def channels(self):
         return super().channels() + [
-            {"channel_id": DM, "name": "", "type": "conversation", "is_joined": True,
+            {"channel_id": DM, "name": "", "type": "anonymous", "total_member_count": 2, "is_joined": True,
+             "last_post_at": self.last_post_at},
+            {"channel_id": GROUP, "name": "", "type": "anonymous", "total_member_count": 4, "is_joined": True,
              "last_post_at": self.last_post_at}]
 
     def send(self, cid, text, thread_id=None):
@@ -210,6 +213,7 @@ def test_direct_message_is_answered(talk):
     w.poll_once()
     assert chat.sent[-1][0] == DM and "user_id: 5" in chat.sent[-1][2]
     assert w.stats["direct"] == 1 and w.stats["answered_today"] == 1
+    assert w.stats["channels"] == 3           # ACE-TEST, channel 1, group conversation
 
 
 def test_channel_message_needs_a_mention(talk):
@@ -239,4 +243,15 @@ def test_clean_text_and_kind():
     assert clean_text("@u:189 mis Food Box TB") == "mis Food Box TB"
     assert clean_text("@ACE, status") == "status"
     assert kind({"type": "synobot"}) is None and kind({"type": "private"}) == "channel"
-    assert kind({"type": "conversation"}) == "direct"
+    assert kind({"type": "anonymous", "total_member_count": 2}) == "direct"
+    assert kind({"type": "anonymous", "total_member_count": 5}) == "group"
+
+
+def test_group_conversation_needs_a_mention(talk):
+    chat, w = talk
+    chat.new(msg(GROUP, 1, "lunch?"))
+    w.poll_once()
+    assert chat.sent == []
+    chat.new(msg(GROUP, 2, "@ACE whoami"))
+    w.poll_once()
+    assert chat.sent[-1][0] == GROUP
