@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.9 - 2026-10-07
+- Fix: an empty chat (e.g. a new direct chat with no messages yet) answered "post not
+  found" (402) and the error stopped that whole round of checks, so other chats were
+  checked less and less often. Each chat is now checked on its own, and an empty chat
+  simply waits for its first message (which is then answered).
+- Quieter logs: the NAS connection no longer writes a line for every file operation.
+
 ## 0.4.8 - 2026-10-07
 - Fix: in some channels (e.g. PaymentTracker-MaraGroup) Chat returns nothing when asked
   for the first message without an anchor, so ACE thought the channel was empty

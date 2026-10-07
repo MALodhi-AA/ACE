@@ -313,12 +313,16 @@ class ChannelWatcher:
                 audit("channel_watch_start", channel_id=cid, channel=self.folder_name(ch), type=ch.get("type"),
                       from_post=latest)
                 continue
-            if not (ch.get("last_post_at", 0) and ch.get("last_post_at", 0) <= st.get("last_at", 0)):
-                saved += self._catch_up(ch, st)
-                st["last_at"] = max(st.get("last_at", 0), ch.get("last_post_at", 0))
-                self._save()
-            if self._polls % THREAD_SCAN_EVERY == 0:
-                saved += self._scan_threads(ch, st)
+            try:
+                if not (ch.get("last_post_at", 0) and ch.get("last_post_at", 0) <= st.get("last_at", 0)):
+                    saved += self._catch_up(ch, st)
+                    st["last_at"] = max(st.get("last_at", 0), ch.get("last_post_at", 0))
+                    self._save()
+                if self._polls % THREAD_SCAN_EVERY == 0:
+                    saved += self._scan_threads(ch, st)
+            except ChatError as exc:
+                # one chat's problem must not stop the others
+                log.warning("channel %s (%s): %s", cid, self.folder_name(ch), exc)
         self._polls += 1
         now = datetime.now(self.tz)
         self.stats["saved_today"] += saved
@@ -333,8 +337,13 @@ class ChannelWatcher:
         saved = 0
         while True:
             anchor = max(st["last_id"], (cid << 32) + 1)       # Chat needs an anchor of 1 or more
-            newer = sorted((p for p in self.chat.posts(cid, anchor, next_count=PAGE)
-                            if p.get("post_id", 0) > st["last_id"]), key=lambda p: p["post_id"])
+            try:
+                batch = self.chat.posts(cid, anchor, next_count=PAGE)
+            except ChatError as exc:
+                if exc.code == 402:                           # "post not found": chat still empty
+                    return saved
+                raise
+            newer = sorted((p for p in batch if p.get("post_id", 0) > st["last_id"]), key=lambda p: p["post_id"])
             if not newer:
                 return saved
             for post in newer:

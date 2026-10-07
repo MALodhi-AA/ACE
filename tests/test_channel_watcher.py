@@ -479,3 +479,30 @@ def test_send_waits_when_chat_says_too_fast(monkeypatch):
 
     c = _client(handler)
     assert c.send(CID, "Done") is True and tries["n"] == 3 and c.me == 189
+
+
+def test_empty_chat_does_not_block_other_chats(tmp_path):
+    """An empty chat answers 'post not found'; ACE must carry on with the other chats."""
+    EMPTY = 271
+
+    class WithEmpty(TalkChat):
+        def channels(self):
+            return [{"channel_id": EMPTY, "name": "", "type": "anonymous", "total_member_count": 2,
+                     "is_joined": True, "last_post_at": self.last_post_at}] + super().channels()
+
+        def latest_post_id(self, cid):
+            return 0 if cid == EMPTY else super().latest_post_id(cid)
+
+        def posts(self, cid, anchor, next_count=0, prev_count=0, thread_id=None):
+            if cid == EMPTY and not any(p["channel_id"] == EMPTY for p in self.all):
+                raise ChatError("post list failed (error 402)", 402)
+            return super().posts(cid, anchor, next_count, prev_count)
+
+    chat = WithEmpty([post(1, "system")])
+    w = ChannelWatcher(chat, store=LocalStore(tmp_path / "f"), state_path=tmp_path / "s.json", tz="Asia/Dubai")
+    w.poll_once()
+    chat.new(post(2, "file", "a.pdf"))
+    assert w.poll_once() == 1                                  # ACE-TEST still handled
+    chat.new(msg(EMPTY, 1, "whoami"))                          # first message in the empty chat
+    w.poll_once()
+    assert chat.sent[-1][0] == EMPTY and "user_id: 5" in chat.sent[-1][2]

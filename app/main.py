@@ -31,7 +31,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), handlers=_handlers,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("ace")
 # The channel watcher polls Chat every few seconds - keep request lines out of the log.
-for _name in ("httpx", "httpcore"):
+for _name in ("httpx", "httpcore", "smbprotocol", "smbclient", "spnego"):
     logging.getLogger(_name).setLevel(logging.WARNING)
 app = FastAPI(title=PROFILE["name"], version=PROFILE["version"])
 
