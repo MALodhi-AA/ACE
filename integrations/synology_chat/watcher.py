@@ -231,8 +231,9 @@ class ChannelWatcher:
             th = threads.get(str(rid))
             if th is None:
                 # Threads that already had replies when ACE first looked: start from now.
-                th = threads[str(rid)] = {"seen_at": root["last_comment_at"] if first_scan else 0,
-                                          "last_id": 0}
+                start = root["last_comment_at"] if first_scan else 0
+                # `since`: replies at or before this time are old and never handled
+                th = threads[str(rid)] = {"seen_at": start, "since": start, "last_id": 0}
             if root["last_comment_at"] <= th["seen_at"]:
                 continue
             anchor = th["last_id"] or (recent[i - 1]["post_id"] if i > 0 else rid - 1)
@@ -240,7 +241,8 @@ class ChannelWatcher:
             while True:
                 replies = sorted((p for p in self.chat.posts(cid, anchor, next_count=PAGE, thread_id=rid)
                                   if p.get("thread_id") == rid and p["post_id"] != rid
-                                  and p["post_id"] > th["last_id"]), key=lambda p: p["post_id"])
+                                  and p["post_id"] > th["last_id"]
+                                  and p.get("create_at", 0) > th.get("since", 0)), key=lambda p: p["post_id"])
                 for post in replies:
                     finished, ok = self._handle(ch, post)
                     if not finished:

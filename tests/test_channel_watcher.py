@@ -291,7 +291,13 @@ def test_files_and_mentions_inside_threads(tmp_path):
     w.poll_once()
     assert chat.sent == []
     chat.comment(3, 5, name="Cred invoice 11 sep 2026_2.png")
+    for p in chat.all:                # new replies are newer than the old one
+        if p["post_id"] >= BASE + 5:
+            p["create_at"] = 1791370000000
     chat.comment(3, 6, text="@u:189 whoami", mentions=[189])
+    chat.all[-1]["create_at"] = 1791370000001
+    old = next(p for p in chat.all if p["post_id"] == BASE + 4)
+    old["mentions"], old["message"] = [189], "@u:189 whoami"   # old question: must stay unanswered
     chat.me = 189
     for _ in range(2):
         w.poll_once()
@@ -300,6 +306,7 @@ def test_files_and_mentions_inside_threads(tmp_path):
     texts = [(t, txt) for _, t, txt in chat.sent]
     assert any(t == BASE + 3 and txt.startswith("Saved:") for t, txt in texts)    # reply in the thread
     assert any(t == BASE + 3 and "user_id: 5" in txt for t, txt in texts)
+    assert sum("user_id: 5" in txt for _, txt in texts) == 1      # old question not answered
     n = len(chat.sent)
     for _ in range(2):
         w.poll_once()
