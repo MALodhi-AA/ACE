@@ -72,7 +72,7 @@ def follow_text(t: dict) -> str:
 
 
 class Assistant:
-    def __init__(self, chat, store: TaskStore | None = None, ask_model=None, bot=None) -> None:
+    def __init__(self, chat, store: TaskStore | None = None, ask_model=None, bot=None, text_model=None) -> None:
         """`chat`: the channel watcher (post, find_channel, username, directory, channels).
         `bot`: read-only view of the attendance + task bot (None if not configured)."""
         self.chat = chat
@@ -83,6 +83,7 @@ class Assistant:
         self.bot = bot
         self.hours = Hours.from_settings()
         self._model = ask_model or self._ask_model
+        self._text = text_model or self._llm_text
         self._last_tick: datetime | None = None
 
     # ---------------------------------------------------------------- helpers
@@ -203,7 +204,8 @@ class Assistant:
         if self.bot and re.match(r"^\s*(bot\s+errors?|delivery\s+(errors?|failures?)|bot\s+health)\b", low):
             say(self.failures_text())
             return True
-        m2 = re.match(r"^\s*(?:what\s+is\s+|what's\s+)?(.+?)\s+working\s+on\??\s*$", t, re.IGNORECASE) or \
+        m2 = re.match(r"^\s*(?:what\s+(?:is|are)\s+|what's\s+)?(\w+)(?:\s+\w+)?\s+(?:currently\s+|now\s+)?working\s+on"
+                      r"(?:\s+(?:now|today|currently))?\??\s*$", t, re.IGNORECASE) or \
             re.match(r"^\s*(?:bot\s+)?tasks\s+(?:of|for)\s+(.+?)\s*$", t, re.IGNORECASE)
         if self.bot and m2:
             say(self.person_text(m2.group(1)))
@@ -222,7 +224,50 @@ class Assistant:
             return self._draft(ch, post, t, mentions, is_direct, thread, previous=draft)
         if INSTRUCTION.match(t):
             return self._draft(ch, post, t, mentions, is_direct, thread)
+        if self.bot and self._about_team(t):
+            say(self.team_answer(t))
+            return True
         return False
+
+    TEAM_WORDS = re.compile(r"\b(working|work on|task|tasks|attendance|late|leave|absent|check(ed)?[\s-]?in|"
+                            r"overdue|team|staff|who|busy|doing|progress|pending|eta|extension|hours|blocked)\b",
+                            re.IGNORECASE)
+
+    def _about_team(self, text: str) -> bool:
+        """A question about staff, attendance or the team's tasks (answered from the bot's data)."""
+        try:
+            names = {w for p in self.bot.people().values()
+                     for w in [*(p.name or "").lower().split(), p.chat_username.lower()] if len(w) >= 3}
+        except Exception:  # noqa: BLE001
+            return False
+        words = set(re.findall(r"[a-z]+", text.lower()))
+        return bool(words & names) or bool(self.TEAM_WORDS.search(text) and "?" in text)
+
+    def team_answer(self, question: str) -> str:
+        """Answer Sir Muhammad Ali's question from today's attendance and the task bot (read-only)."""
+        from app.profile import persona
+        try:
+            context = self.attendance_lines() + [""] + self.bot_task_lines(limit=40)
+            low = question.lower()
+            for p in self.bot.people().values():
+                first = (p.name or "").split()[0].lower() if p.name else ""
+                if (first and first in low) or (p.chat_username and p.chat_username.lower() in low):
+                    context += ["", self.person_text(p.name)]
+        except Exception as exc:  # noqa: BLE001
+            return f"I couldn't read the attendance / task bot just now: {exc}"
+        system = (persona() + f"\nYou are answering {MANAGER} (private, never shared with staff). "
+                  "Use ONLY the data below from the firm's attendance + task bot (read-only, as of now). "
+                  "If the data doesn't answer the question, say so briefly. Plain text, short.\n\n"
+                  "DATA:\n" + "\n".join(context))
+        try:
+            return self._text(system, question)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("team answer failed: %s", exc)
+            return "\n".join(context)
+
+    @staticmethod
+    def _llm_text(system: str, user: str) -> str:
+        return llm.complete(system, [{"role": "user", "content": user}], max_tokens=1200).text
 
     def _draft(self, ch, post, text, mentions, is_direct, thread, previous: dict | None = None) -> bool:
         cid = int(ch["channel_id"])

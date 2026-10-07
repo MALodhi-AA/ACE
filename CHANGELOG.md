@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.1 - 2026-10-07
+- Questions from Sir Muhammad Ali about staff, attendance or the team's tasks, in any
+  wording ("what is Aiman doing?", "is Ali busy with anything urgent?", "who is late
+  today?"), are answered from the attendance + task bot's live data instead of the
+  general AI answer ("I can't see task assignments").
+- `what is <name> currently working on` / `... working on now` also accepted.
+
 ## 0.6.0 - 2026-10-07
 Attendance + task bot connected (read-only).
 - ACE reads the attendance + task bot's MariaDB (employees, attendance_logs, tasks,

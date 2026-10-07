@@ -382,3 +382,22 @@ def test_reader_never_writes():
     bot = Bot(db=db, cache_seconds=0)
     bot.people(); bot.today(); bot.tasks(); bot.delivery_failures()
     assert all(q.lstrip().upper().startswith("SELECT") for q in db.queries)
+
+
+def test_team_questions_answered_from_bot_data(office_att):
+    chat, w, replies, clock, say, db = office_att
+    say(MA, "hi")
+    check_in(db, 2, datetime(2026, 10, 7, 11, 5, tzinfo=TZ))
+    db.tasks = [bot_task("T2610-009", "Mara payroll", 2)]
+    seen = {}
+
+    def text_model(system, user):
+        seen["system"] = system
+        return "Ali is on T2610-009 Mara payroll."
+
+    w.assistant._text = text_model
+    say(MA, "what is Ali currently working on?")             # command form
+    assert last_to(chat, DM_MA).startswith("Ali today: checked in 11:05")
+    say(MA, "is Ali busy with anything urgent?")             # free question -> answered from the data
+    assert last_to(chat, DM_MA) == "Ali is on T2610-009 Mara payroll."
+    assert "T2610-009 Mara payroll" in seen["system"] and "Attendance:" in seen["system"]

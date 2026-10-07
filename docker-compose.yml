@@ -12,7 +12,7 @@ name: ace
 services:
   ace:
     build: .
-    image: ace:0.6.0
+    image: ace:0.6.1
     container_name: ace
     restart: unless-stopped
     env_file: .env
