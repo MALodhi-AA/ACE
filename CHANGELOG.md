@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 - 2026-10-07
+- Chat replies are plain text: Synology Chat does not render markdown, so ACE is told
+  not to use it and any `**bold**`, `#` headings, backticks and `*` bullets are stripped
+  before sending.
+
 ## 0.3.0 — 2026-10-07
 
 ACE gets NAS access like an employee.

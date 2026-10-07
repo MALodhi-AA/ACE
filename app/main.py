@@ -86,4 +86,4 @@ async def synology_slash(request: Request, background: BackgroundTasks):
     if resp.background:
         background.add_task(_run_background, msg, resp.background)
     # Slash commands: the immediate text is returned in the HTTP response.
-    return JSONResponse({"text": resp.text or "Thinking…"})
+    return JSONResponse({"text": chat.plain(resp.text or "Thinking…")})

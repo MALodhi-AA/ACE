@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import re
 import logging
 import threading
 import time
@@ -82,6 +83,22 @@ def chunk_text(text: str, limit: int = MAX_MESSAGE_CHARS) -> list[str]:
     return [c.rstrip("\n") for c in chunks if c.strip()]
 
 
+_MD_RULES = [
+    (re.compile(r"\*\*(.+?)\*\*", re.S), r"\1"),     # **bold**
+    (re.compile(r"__(.+?)__", re.S), r"\1"),             # __bold__
+    (re.compile(r"(?m)^\s{0,3}#{1,6}\s+"), ""),          # # headings
+    (re.compile(r"(?m)^(\s*)\* "), r"\1- "),             # * bullets -> -
+    (re.compile(r"`([^`\n]+)`"), r"\1"),                 # `code`
+]
+
+
+def plain(text: str) -> str:
+    """Synology Chat does not render markdown, so strip the common marks."""
+    for rx, repl in _MD_RULES:
+        text = rx.sub(repl, text)
+    return text
+
+
 def _chatbot_url() -> str:
     token = quote(f'"{settings.synology_bot_token}"', safe="")
     return f"{settings.synology_base_url}/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token={token}"
@@ -115,7 +132,7 @@ def send_to_user(user_id: str, text: str) -> bool:
         log.error("Chatbot not configured (SYNOLOGY_BASE_URL / SYNOLOGY_BOT_TOKEN)")
         return False
     ok = True
-    for part in chunk_text(text):
+    for part in chunk_text(plain(text)):
         ok &= _post(_chatbot_url(), {"text": part, "user_ids": [int(user_id)]})
     return ok
 
@@ -126,7 +143,7 @@ def send_to_channel(text: str) -> bool:
         log.error("SYNOLOGY_INCOMING_WEBHOOK_URL not configured")
         return False
     ok = True
-    for part in chunk_text(text):
+    for part in chunk_text(plain(text)):
         ok &= _post(settings.synology_incoming_webhook_url, {"text": part})
     return ok
 
