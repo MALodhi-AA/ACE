@@ -72,7 +72,8 @@ def follow_text(t: dict) -> str:
 
 
 class Assistant:
-    def __init__(self, chat, store: TaskStore | None = None, ask_model=None, bot=None, text_model=None) -> None:
+    def __init__(self, chat, store: TaskStore | None = None, ask_model=None, bot=None, text_model=None,
+                 fast_brain=None, full_brain=None) -> None:
         """`chat`: the channel watcher (post, find_channel, username, directory, channels).
         `bot`: read-only view of the attendance + task bot (None if not configured)."""
         self.chat = chat
@@ -84,6 +85,8 @@ class Assistant:
         self.hours = Hours.from_settings()
         self._model = ask_model or self._ask_model
         self._text = text_model or self._llm_text
+        self._fast_brain, self._full_brain = fast_brain, full_brain
+        self.brain = None
         self._last_tick: datetime | None = None
 
     # ---------------------------------------------------------------- helpers
@@ -224,46 +227,35 @@ class Assistant:
             return self._draft(ch, post, t, mentions, is_direct, thread, previous=draft)
         if INSTRUCTION.match(t):
             return self._draft(ch, post, t, mentions, is_direct, thread)
-        if self.bot and self._about_team(t):
-            say(self.team_answer(t))
-            return True
-        return False
+        return self._think(ch, post, t, mentions, is_direct, thread)
 
-    TEAM_WORDS = re.compile(r"\b(working|work on|task|tasks|attendance|late|leave|absent|check(ed)?[\s-]?in|"
-                            r"overdue|team|staff|who|busy|doing|progress|pending|eta|extension|hours|blocked)\b",
-                            re.IGNORECASE)
+    def _think(self, ch, post, text, mentions, is_direct, thread) -> bool:
+        """Steps 2-4 of the ladder (learned pattern, fast AI, full AI) - in the background."""
+        from app.brain import Brain, is_builtin
+        if is_builtin(text) and not text.strip().lower().startswith("ask "):
+            from app.llm import usage
+            usage.route("command")
+            return False                                  # status, files, mis ... answered as before
+        if getattr(self, "brain", None) is None:
+            self.brain = Brain(self, fast=self._fast_brain, full=self._full_brain)
+        cid = int(ch["channel_id"])
+        uid = str(post.get("creator_id"))
+        ctx = {"ch": ch, "post": post, "mentions": mentions, "is_direct": is_direct, "thread": thread}
 
-    def _about_team(self, text: str) -> bool:
-        """A question about staff, attendance or the team's tasks (answered from the bot's data)."""
-        try:
-            names = {w for p in self.bot.people().values()
-                     for w in [*(p.name or "").lower().split(), p.chat_username.lower()] if len(w) >= 3}
-        except Exception:  # noqa: BLE001
-            return False
-        words = set(re.findall(r"[a-z]+", text.lower()))
-        return bool(words & names) or bool(self.TEAM_WORDS.search(text) and "?" in text)
+        def work():
+            try:
+                reply = self.brain.handle(uid, text, ctx)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("brain failed")
+                reply = f"Something went wrong ({type(exc).__name__}). The error has been logged."
+            if reply is None:
+                self.chat.answer_normally(ch, post, text)
+            elif reply:
+                self.chat.post(cid, reply, thread)
 
-    def team_answer(self, question: str) -> str:
-        """Answer Sir Muhammad Ali's question from today's attendance and the task bot (read-only)."""
-        from app.profile import persona
-        try:
-            context = self.attendance_lines() + [""] + self.bot_task_lines(limit=40)
-            low = question.lower()
-            for p in self.bot.people().values():
-                first = (p.name or "").split()[0].lower() if p.name else ""
-                if (first and first in low) or (p.chat_username and p.chat_username.lower() in low):
-                    context += ["", self.person_text(p.name)]
-        except Exception as exc:  # noqa: BLE001
-            return f"I couldn't read the attendance / task bot just now: {exc}"
-        system = (persona() + f"\nYou are answering {MANAGER} (private, never shared with staff). "
-                  "Use ONLY the data below from the firm's attendance + task bot (read-only, as of now). "
-                  "If the data doesn't answer the question, say so briefly. Plain text, short.\n\n"
-                  "DATA:\n" + "\n".join(context))
-        try:
-            return self._text(system, question)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("team answer failed: %s", exc)
-            return "\n".join(context)
+        runner = getattr(self.chat, "run_later", None)
+        (runner or (lambda f: f()))(work)
+        return True
 
     @staticmethod
     def _llm_text(system: str, user: str) -> str:
@@ -299,7 +291,8 @@ If it is not an instruction for a staff member (e.g. a question), set is_instruc
 Staff list (id: user name):
 {self.directory_text()}
 Mentioned in the message: {json.dumps(mentions) or '{}'}
-Channels ACE is in: {channels}"""
+Channels ACE is in: {channels}
+Things {MANAGER} told ACE to remember: {"; ".join(str(m["value"]) for m in self.store.memories("fact")) or "-"}"""
         user = text if not previous else (
             f"Previous draft: {json.dumps(previous['parsed'])}\nCorrection from {MANAGER}: {text}\n"
             "Return the full corrected JSON.")
@@ -722,6 +715,31 @@ Today is {now():%A %d %B %Y}. Their open tasks:
                     out.append(f"- ... and {len(rows) - limit} more")
         return out
 
+    def team_tasks_text(self, view: str = "open", person: str | None = None, client: str | None = None) -> str:
+        from integrations.attendance.reader import fmt_due
+        try:
+            t = self.bot.tasks()
+        except Exception as exc:  # noqa: BLE001
+            return f"I couldn't read the task bot: {exc}"
+        key = {"waiting_approval": None}.get(view, view)
+        rows = (t["eta_waiting"] + t["ext_waiting"] + t["create_waiting"]) if view == "waiting_approval" else t.get(key, t["open"])
+        if person:
+            low = person.strip().lower()
+            ids = {p.employee_id for p in self.bot.people().values()
+                   if low in (p.name or "").lower() or low == p.chat_username.lower()}
+            rows = [r for r in rows if int(r["emp"] or 0) in ids]
+        if client:
+            c = client.strip().lower()
+            rows = [r for r in rows if c in (r["title"] or "").lower() or c in (r.get("channel_name") or "").lower()]
+        title = view.replace("_", " ") + (f" - {person}" if person else "") + (f" - {client}" if client else "")
+        out = [f"Team tasks ({title}): {len(rows)}"]
+        for r in sorted(rows, key=lambda r: r["due"] or datetime.max.replace(tzinfo=tz()))[:30]:
+            out.append(f"- {r['task_code']} {r['title'][:80]} - {self._bot_name(r['emp'])} - {r['status']} "
+                       f"(due {fmt_due(r['due'])})")
+        if len(rows) > 30:
+            out.append(f"- ... and {len(rows) - 30} more")
+        return "\n".join(out)
+
     def bot_tasks_text(self) -> str:
         try:
             return "\n".join(self.bot_task_lines(limit=25))
@@ -786,6 +804,8 @@ Today is {now():%A %d %B %Y}. Their open tasks:
                 att = f"\nAttendance + task bot ✓ - {len(people)} staff, {matched} matched to Chat users"
             except Exception as exc:  # noqa: BLE001
                 att = f"\nAttendance + task bot ✗ - {exc}"
+        from app.llm import usage
+        att += "\n" + usage.line()
         return att.lstrip("\n") + ("\n" if att else "") + (f"Tasks: {len(tasks)} open, {late} overdue; digest {settings.digest_time:%H:%M} "
                 f"{'✓' if dm_ok else '(send me any direct message once so I can reach you)'}; "
                 f"staff list: {staff} people" + ("" if staff else " - use @mentions in instructions"))

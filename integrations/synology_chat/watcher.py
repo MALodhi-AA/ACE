@@ -689,6 +689,19 @@ class ChannelWatcher:
         if cmd is not None:
             self._start_collect(ch, post, cmd)
             return
+        self.answer_normally(ch, post, text)
+
+    def run_later(self, fn) -> None:
+        """Run slow work (AI) off the polling thread."""
+        self._pool.submit(fn)
+
+    def answer_normally(self, ch: dict, post: dict, text: str) -> None:
+        """The ordinary command / AI answer (as the bot does)."""
+        from app.employee import handle
+        cid = int(ch["channel_id"])
+        uid = str(post.get("creator_id", ""))
+        where = "chat-direct" if kind(ch) == "direct" else f"chat-{kind(ch)}:{self.folder_name(ch)}"
+        thread = post.get("thread_id") or None
         try:
             resp = handle(uid, self.username(uid), text or "help", where)
         except Exception as exc:  # noqa: BLE001

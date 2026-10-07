@@ -45,6 +45,14 @@ CREATE TABLE IF NOT EXISTS events (
   task_id INTEGER, ts TEXT, kind TEXT, by TEXT, text TEXT
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS memory (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,            -- pattern | fact | correction
+  key TEXT,                      -- pattern template / topic
+  value TEXT,                    -- JSON (pattern: tool + args) or text
+  uses INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT, last_used TEXT
+);
 """
 
 
@@ -195,6 +203,39 @@ class TaskStore:
         q = f"SELECT * FROM events WHERE ts>=? AND kind IN ({','.join('?' * len(kinds))}) ORDER BY id"
         with self._lock:
             return [dict(r) for r in self.db.execute(q, (since.isoformat(timespec="seconds"), *kinds))]
+
+    # --- memory (v0.7): what ACE has learned -------------------------------------------
+    def remember(self, kind: str, key: str, value) -> int:
+        with self._lock:
+            old = self.db.execute("SELECT id FROM memory WHERE kind=? AND key=?", (kind, key)).fetchone()
+            if old:
+                self.db.execute("UPDATE memory SET value=? WHERE id=?", (json.dumps(value), old["id"]))
+                self.db.commit()
+                return old["id"]
+            cur = self.db.execute("INSERT INTO memory (kind, key, value, created_at) VALUES (?,?,?,?)",
+                                  (kind, key, json.dumps(value), now().isoformat(timespec="seconds")))
+            self.db.commit()
+            return cur.lastrowid
+
+    def memories(self, kind: str | None = None) -> list[dict]:
+        q, a = ("SELECT * FROM memory WHERE kind=? ORDER BY id", (kind,)) if kind else ("SELECT * FROM memory ORDER BY id", ())
+        with self._lock:
+            rows = [dict(r) for r in self.db.execute(q, a)]
+        for r in rows:
+            r["value"] = json.loads(r["value"]) if r["value"] else None
+        return rows
+
+    def used_memory(self, mid: int) -> None:
+        with self._lock:
+            self.db.execute("UPDATE memory SET uses=uses+1, last_used=? WHERE id=?",
+                            (now().isoformat(timespec="seconds"), mid))
+            self.db.commit()
+
+    def forget(self, mid: int) -> bool:
+        with self._lock:
+            n = self.db.execute("DELETE FROM memory WHERE id=?", (mid,)).rowcount
+            self.db.commit()
+        return n > 0
 
     def get_meta(self, key: str, default=None):
         with self._lock:

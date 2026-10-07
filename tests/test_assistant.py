@@ -384,20 +384,105 @@ def test_reader_never_writes():
     assert all(q.lstrip().upper().startswith("SELECT") for q in db.queries)
 
 
-def test_team_questions_answered_from_bot_data(office_att):
+# --- v0.7: the brain (ladder + learning) --------------------------------------------------
+from types import SimpleNamespace as NS  # noqa: E402
+
+
+@pytest.fixture
+def brainy(office_att):
     chat, w, replies, clock, say, db = office_att
+    calls = {"fast": [], "full": []}
+    picks = {"next": None}
+    fulls = {"script": []}
+
+    def fast(system, user):
+        calls["fast"].append(user)
+        return picks["next"](user) if callable(picks["next"]) else picks["next"]
+
+    def full(system, messages, tools):
+        calls["full"].append(messages)
+        return fulls["script"].pop(0)(messages)
+
+    w.assistant._fast_brain, w.assistant._full_brain = fast, full
+    w.run_later = lambda f: f()
     say(MA, "hi")
     check_in(db, 2, datetime(2026, 10, 7, 11, 5, tzinfo=TZ))
-    db.tasks = [bot_task("T2610-009", "Mara payroll", 2)]
-    seen = {}
+    db.tasks = [bot_task("T2610-009", "Mara payroll", 2), bot_task("T2610-010", "Volt VAT", 3, status="overdue")]
+    return chat, w, say, db, calls, picks, fulls
 
-    def text_model(system, user):
-        seen["system"] = system
-        return "Ali is on T2610-009 Mara payroll."
 
-    w.assistant._text = text_model
-    say(MA, "what is Ali currently working on?")             # command form
-    assert last_to(chat, DM_MA).startswith("Ali today: checked in 11:05")
-    say(MA, "is Ali busy with anything urgent?")             # free question -> answered from the data
-    assert last_to(chat, DM_MA) == "Ali is on T2610-009 Mara payroll."
-    assert "T2610-009 Mara payroll" in seen["system"] and "Attendance:" in seen["system"]
+def test_fast_ai_answers_and_learns_then_no_ai_next_time(brainy):
+    chat, w, say, db, calls, picks, fulls = brainy
+    picks["next"] = {"tool": "person_status", "args": {"name": "Ali"}, "complex": False}
+    say(MA, "what is Ali doing these days?")
+    assert last_to(chat, DM_MA).startswith("Ali today: checked in 11:05") and len(calls["fast"]) == 1
+    pats = w.assistant.store.memories("pattern")
+    assert pats[0]["key"] == "what is {person} doing these days" and pats[0]["value"]["args"] == {"name": "{person}"}
+    say(MA, "What is Amir doing these days")                  # same phrasing, another person: no AI
+    assert last_to(chat, DM_MA).startswith("Amir Hussain today:") is False      # title applied
+    assert "Sir Amir Hussain today:" in last_to(chat, DM_MA) and len(calls["fast"]) == 1
+
+
+def test_correction_forgets_pattern_and_uses_full_ai(brainy):
+    chat, w, say, db, calls, picks, fulls = brainy
+    picks["next"] = {"tool": "person_status", "args": {"name": "Ali"}, "complex": False}
+    say(MA, "what about Ali")
+    assert w.assistant.store.memories("pattern")
+    fulls["script"] = [
+        lambda m: NS(content=[NS(type="tool_use", id="t1", name="team_tasks", input={"view": "open", "person": "Ali"})]),
+        lambda m: NS(content=[NS(type="text", text="Ali has 1 open task: T2610-009 Mara payroll.")]),
+    ]
+    say(MA, "no, I meant his tasks")
+    assert last_to(chat, DM_MA) == "Ali has 1 open task: T2610-009 Mara payroll."
+    assert not w.assistant.store.memories("pattern")
+    assert w.assistant.store.memories("correction")
+    tool_result = calls["full"][-1][-1]["content"][0]["content"]
+    assert "T2610-009 Mara payroll" in tool_result
+
+
+def test_complex_question_goes_to_full_ai_with_tools(brainy):
+    chat, w, say, db, calls, picks, fulls = brainy
+    picks["next"] = {"tool": None, "complex": True}
+    fulls["script"] = [
+        lambda m: NS(content=[NS(type="tool_use", id="a", name="attendance_today", input={}),
+                              NS(type="tool_use", id="b", name="team_tasks", input={"view": "overdue"})]),
+        lambda m: NS(content=[NS(type="text", text="Sir Amir Hussain is on leave and has the overdue Volt VAT.")]),
+    ]
+    say(MA, "anything I should worry about today?")
+    assert last_to(chat, DM_MA).startswith("Sir Amir Hussain is on leave")
+    results = calls["full"][-1][-1]["content"]
+    assert "Attendance:" in results[0]["content"] and "T2610-010 Volt VAT" in results[1]["content"]
+    assert not w.assistant.store.memories("pattern")            # full AI answers are not turned into patterns
+
+
+def test_general_question_answered_normally_and_builtins_skip_ai(brainy):
+    chat, w, say, db, calls, picks, fulls = brainy
+    picks["next"] = {"tool": None, "general": True}
+    say(MA, "explain EBITDA")
+    assert "AI model is not connected" in last_to(chat, DM_MA)
+    n = len(calls["fast"])
+    say(MA, "whoami")
+    assert "user_id: 7" in last_to(chat, DM_MA) and len(calls["fast"]) == n
+
+
+def test_memory_commands(brainy):
+    chat, w, say, db, calls, picks, fulls = brainy
+    say(MA, "remember that Aiman handles Mara and Volt")
+    assert "I'll remember: Aiman handles Mara and Volt" in last_to(chat, DM_MA)
+    say(MA, "what have you learned?")
+    listing = last_to(chat, DM_MA)
+    assert "fact: Aiman handles Mara and Volt" in listing
+    mid = int(listing.splitlines()[1].split(".")[0])
+    say(MA, f"forget {mid}")
+    assert last_to(chat, DM_MA) == "Forgotten." and not w.assistant.store.memories("fact")
+    say(MA, "learning off")
+    picks["next"] = {"tool": "attendance_today", "args": {}, "complex": False}
+    say(MA, "who came in today")
+    assert not w.assistant.store.memories("pattern")
+    assert calls["fast"] == ["who came in today"]
+
+
+def test_staff_never_reach_the_brain(brainy):
+    chat, w, say, db, calls, picks, fulls = brainy
+    say(ALI, "what is Amir doing these days?")
+    assert calls["fast"] == [] and "Attendance" not in last_to(chat, DM_ALI)

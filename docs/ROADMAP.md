@@ -14,7 +14,8 @@ any action.
 | 4c | ACE as a channel member: own Chat account, saves files shared in its channels | ✅ v0.4 |
 | 4d | Tasks from Sir Muhammad Ali's instructions, follow-ups, staff replies, digest | ✅ v0.5 |
 | 4e | Attendance + task bot DB (read-only): check-in delivery, follow-ups while in, attendance + team tasks in digest | ✅ v0.6 |
-| 4f | Standing instructions, compliance calendar (VAT/CT), weekly staff summary | planned v0.7 |
+| 4g | Brain: command -> learned -> fast AI -> full AI with tools; memory and learning | ✅ v0.7 |
+| 4f | Standing instructions, compliance calendar (VAT/CT), weekly staff summary | planned v0.8 |
 | 5 | Train MIS on real historical TBs without Tally (v1.1, v1.2 …) | ⏭ next |
 | 6 | Tally connector, 100 % read-only (TB, P&L, BS, ledgers, vouchers, cost centres) | planned |
 | 7 | Task engine: AI tasks + human tasks via the existing task bot; recheck on `/task done` | planned |

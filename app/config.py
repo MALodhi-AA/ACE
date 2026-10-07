@@ -67,6 +67,9 @@ class Settings:
     # --- AI model -----------------------------------------------------------
     anthropic_api_key: str = field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", ""))
     claude_model: str = field(default_factory=lambda: os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5"))
+    # cheap, fast model for routing simple questions (the "fast AI" step)
+    claude_fast_model: str = field(default_factory=lambda: os.getenv("CLAUDE_FAST_MODEL", "claude-haiku-4-5"))
+    learning: bool = field(default_factory=lambda: _bool("ACE_LEARNING", True))
     claude_max_tokens: int = field(default_factory=lambda: int(os.getenv("CLAUDE_MAX_TOKENS", "4000")))
 
     # --- Synology Chat ------------------------------------------------------

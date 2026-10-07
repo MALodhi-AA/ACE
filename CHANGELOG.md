@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.0 - 2026-10-07
+ACE's brain: any wording, AI only when needed, and learning.
+- Messages from Sir Muhammad Ali go down a ladder and stop at the first step that can
+  answer: 1) known commands, 2) learned phrasings (no AI), 3) fast AI
+  (CLAUDE_FAST_MODEL, default claude-haiku-4-5) picks one data tool and ACE replies with
+  its result, 4) full AI (CLAUDE_MODEL) uses the tools itself and reasons.
+- Tools: attendance today, a person's status + open tasks, team tasks (overdue / blocked /
+  due today / waiting approval / submitted / completed / open, by person or client), ACE's
+  follow-ups, bot health, client files, prepare a follow-up (draft for OK), remember a fact.
+- Learning: a phrasing answered by the fast AI is saved with names replaced by {person};
+  similar questions are then answered without AI. "no / wrong / I meant ..." forgets it and
+  asks the full AI. "remember that ..." saves facts used in answers and drafts.
+  "what have you learned?", "forget <n>", "forget all patterns", "learning on/off".
+- `status` shows "AI today: N questions - X without AI, Y fast AI, Z full AI; ~$cost".
+- Staff never reach the brain or its tools; built-in commands (status, files, mis ...) and
+  general questions are answered as before.
+- Replaces the v0.6.1 keyword trigger for team questions.
+
 ## 0.6.1 - 2026-10-07
 - Questions from Sir Muhammad Ali about staff, attendance or the team's tasks, in any
   wording ("what is Aiman doing?", "is Ali busy with anything urgent?", "who is late
