@@ -45,3 +45,11 @@ def test_non_spreadsheet_refused(data_dir):
 def test_unreachable_source_message(data_dir):
     with pytest.raises(FileAccessError, match="can't reach the 'Missing' folder"):
         resolve_file("Missing/x.xlsx")
+
+
+def test_titles_for_people():
+    from app.profile import display_name, persona
+    assert display_name("Amir Hussain") == "Sir Amir Hussain"
+    assert display_name("muhammad ali lodhi") == "Sir Muhammad Ali"
+    assert display_name("Ali") == "Ali"
+    assert "Sir Amir Hussain" in persona()

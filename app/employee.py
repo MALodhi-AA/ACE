@@ -27,7 +27,7 @@ from skills.registry import SKILLS, by_command
 
 log = logging.getLogger(__name__)
 
-from app.profile import MANAGER, PROFILE  # noqa: E402
+from app.profile import MANAGER, PROFILE, display_name, persona  # noqa: E402
 STARTED_AT = datetime.now(ZoneInfo(settings.timezone))
 
 # short per-user conversation memory for `ask` (in memory; resets on restart)
@@ -166,16 +166,17 @@ def files_text(ref: str = "") -> str:
         return f"⚠️ {exc}"
 
 
-def ask(user_key: str, question: str) -> str:
+def ask(user_key: str, question: str, speaker: str = "") -> str:
     if not llm.configured:
         return "My AI model is not connected yet (ANTHROPIC_API_KEY missing). Built-in commands still work - send `help`."
     with _history_lock:
         hist = list(_history[user_key])
     skills_list = ", ".join(f"{s.name} (command: {s.usage})" for s in SKILLS.values())
     system = (
-        PROFILE["persona"]
+        persona()
         + f"\nToday is {datetime.now(ZoneInfo(settings.timezone)):%A %d %B %Y}."
         + f"\nYour skills: {skills_list}. If the user wants a skill run, tell them the exact command."
+        + (f"\nYou are talking to {display_name(speaker)}; address them by that name." if speaker else "")
     )
     messages = hist + [{"role": "user", "content": question}]
     r = llm.complete(system, messages)
@@ -196,7 +197,7 @@ def handle(user_id: str, username: str, text: str, channel: str) -> Response:
 
     if not is_allowed(user_id, username):
         audit("denied", command=cmd, **who)
-        return Response(f"Sorry {username or 'there'}, you are not authorised to use {PROFILE['name']}. "
+        return Response(f"Sorry {display_name(username) or 'there'}, you are not authorised to use {PROFILE['name']}. "
                         f"Ask {MANAGER} to add your user id ({user_id}) to ALLOWED_USERS.")
 
     audit("request", command=cmd, arg=arg[:200], **who)
@@ -223,7 +224,7 @@ def handle(user_id: str, username: str, text: str, channel: str) -> Response:
 
         def job() -> str:
             t0 = time.monotonic()
-            result = skill.run(arg, requested_by=username or user_id, persona=PROFILE["persona"])
+            result = skill.run(arg, requested_by=username or user_id, persona=persona())
             audit("skill_run", skill=skill.key, version=skill.version, file=arg, ok=result.ok,
                   report=str(result.report_path) if result.report_path else None,
                   seconds=round(time.monotonic() - t0, 1), **who)
@@ -239,7 +240,7 @@ def handle(user_id: str, username: str, text: str, channel: str) -> Response:
 
     def answer() -> str:
         try:
-            return ask(user_id, question)
+            return ask(user_id, question, username)
         except Exception as exc:  # noqa: BLE001
             log.exception("ask failed")
             audit("error", where="ask", error=repr(exc), **who)

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.11 - 2026-10-07
+- Titles for colleagues: `config/employee.yaml` now has a `titles:` list. ACE always
+  writes "Sir Amir Hussain" (and "Sir Muhammad Ali"), in AI answers and in its own
+  messages, and addresses the person it is talking to by their title.
+
 ## 0.4.10 - 2026-10-07
 - ACE refers to the head of the firm as "Sir Muhammad Ali" everywhere: in answers (AI
   persona), in its own messages ("Only Sir Muhammad Ali can ...", "Ask Sir Muhammad Ali
