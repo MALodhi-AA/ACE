@@ -53,3 +53,11 @@ def test_titles_for_people():
     assert display_name("muhammad ali lodhi") == "Sir Muhammad Ali"
     assert display_name("Ali") == "Ali"
     assert "Sir Amir Hussain" in persona()
+
+
+def test_attendance_db_refuses_writes():
+    from integrations.attendance.db import AttendanceDB
+    db = AttendanceDB(host="x", user="u", password="p")
+    for sql in ("UPDATE t SET a=1", "DELETE FROM t", "insert into t values (1)", "DROP TABLE t", "SET x=1"):
+        with pytest.raises(PermissionError):
+            db.query(sql)

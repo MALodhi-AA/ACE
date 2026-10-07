@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.2 - 2026-10-07
+- Attendance database (step 1 of v0.6): read-only MariaDB client
+  (`integrations/attendance/db.py`; read-only session, only SELECT/SHOW allowed) and a probe
+  `python -m integrations.attendance.probe` that lists databases, tables, columns, row
+  counts and date ranges - never personal values. Settings ATT_DB_HOST / PORT / USER /
+  PASSWORD / NAME. New dependency: PyMySQL.
+
 ## 0.5.1 - 2026-10-07
 - Follow-ups without a time now go out at the start of working hours (WORK_START, e.g.
   11:00) instead of a fixed 10:00, matching the attendance system's hours.
