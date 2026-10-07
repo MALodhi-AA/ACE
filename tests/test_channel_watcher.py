@@ -426,3 +426,30 @@ def test_collect_unknown_channel_suggests_a_name(history):
     chat.new(msg(DM, 2, 'collect files from "ACE-TST"'))
     w.poll_once()
     assert "Did you mean ACE-TEST?" in chat.sent[-1][2]
+
+
+def test_collect_reads_whole_history_when_chat_caps_page_size(tmp_path, monkeypatch):
+    """Chat may return fewer posts than asked for; ACE must keep paging, not stop."""
+    monkeypatch.setattr(settings, "ace_admins", ["5"])
+
+    class Capped(HistoryChat):
+        def posts(self, cid, anchor, next_count=0, prev_count=0, thread_id=None):
+            return super().posts(cid, anchor, min(next_count, 5), min(prev_count, 5), thread_id)
+
+    t0 = 1788220800000
+    chat = Capped([post(n, "normal", at=t0 + n * 1000) for n in range(1, 40)]
+                  + [post(40, "file", "late.pdf", at=t0 + DAY * 30)])
+    w = ChannelWatcher(chat, store=LocalStore(tmp_path / "f"), state_path=tmp_path / "s.json", tz="Asia/Dubai")
+    w.poll_once()
+    assert w.state[str(CID)]["last_id"] == BASE + 40          # baseline really is the newest post
+    r = w.collect(w.find_channel("ACE-TEST"))
+    assert r["saved"] == 1 and r["checked"] == 40
+
+
+def test_old_state_is_rebaselined(tmp_path):
+    import json
+    (tmp_path / "s.json").write_text(json.dumps({str(CID): {"last_id": BASE + 1, "last_at": 0}, "_me": {"id": 189}}))
+    chat = FakeChat([post(1, "system"), post(2, "file", "old.pdf"), post(3)])
+    w = ChannelWatcher(chat, store=LocalStore(tmp_path / "f"), state_path=tmp_path / "s.json", tz="Asia/Dubai")
+    assert w.poll_once() == 0 and w.state[str(CID)]["last_id"] == BASE + 3     # old.pdf not saved
+    assert w.state["_me"] == {"id": 189}

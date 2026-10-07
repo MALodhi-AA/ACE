@@ -168,9 +168,7 @@ class ChatUser:
             newer = [p["post_id"] for p in self.posts(channel_id, last, next_count=page) if p["post_id"] > last]
             if not newer:
                 break
-            last = max(newer)
-            if len(newer) < page:
-                break
+            last = max(newer)   # keep going until Chat returns nothing newer (it may cap page sizes)
         return last
 
     def send(self, channel_id: int, text: str, thread_id: int | None = None) -> bool:

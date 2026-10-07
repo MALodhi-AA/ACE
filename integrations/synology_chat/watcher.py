@@ -228,11 +228,21 @@ class ChannelWatcher:
             self.chat.me = int(me)
 
     # --- state -----------------------------------------------------------------
+    STATE_VERSION = 2
+
     def _load(self) -> dict:
         try:
-            return json.loads(self.state_path.read_text(encoding="utf-8"))
+            state = json.loads(self.state_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return {}
+            return {"_v": self.STATE_VERSION}
+        if state.get("_v") != self.STATE_VERSION:
+            # Before v0.4.7 the starting point of big channels could be found too early
+            # (Chat caps page sizes). Start every chat again from its newest message so
+            # nothing old is answered or saved by itself.
+            log.info("channel watcher: state from an older version - starting from the newest messages")
+            state = {k: v for k, v in state.items() if k.startswith("_")}
+            state["_v"] = self.STATE_VERSION
+        return state
 
     def _save(self) -> None:
         try:
@@ -332,9 +342,7 @@ class ChannelWatcher:
                     return saved  # retry this post next round
                 saved += ok
                 st["last_id"] = post["post_id"]
-            self._save()
-            if len(newer) < PAGE:
-                return saved
+            self._save()      # loop again: Chat may return fewer than asked even when more exist
 
     # --- thread replies ---------------------------------------------------------------
     def _scan_threads(self, ch: dict, st: dict) -> int:
@@ -378,7 +386,7 @@ class ChannelWatcher:
                         break
                     saved += ok
                     th["last_id"] = anchor = post["post_id"]
-                if not done or len(replies) < PAGE:
+                if not done or not replies:
                     break
             if done:
                 th["seen_at"] = root["last_comment_at"]
@@ -508,7 +516,8 @@ class ChannelWatcher:
         cid = int(ch["channel_id"])
         lo = int(datetime.combine(start, datetime.min.time(), self.tz).timestamp() * 1000) if start else 0
         hi = (int(datetime.combine(end, datetime.max.time(), self.tz).timestamp() * 1000) if end else 1 << 62)
-        res = {"saved": 0, "already": 0, "skipped": 0, "failed": 0, "bytes": 0, "errors": []}
+        res = {"saved": 0, "already": 0, "skipped": 0, "failed": 0, "bytes": 0, "errors": [],
+               "checked": 0, "first_at": 0, "last_at": 0}
 
         def take(post: dict) -> None:
             fp = post.get("file_props")
@@ -542,6 +551,9 @@ class ChannelWatcher:
             if not page:
                 break
             for p in page:
+                res["checked"] += 1
+                res["first_at"] = res["first_at"] or p.get("create_at", 0)
+                res["last_at"] = max(res["last_at"], p.get("create_at", 0))
                 if p.get("create_at", 0) > hi:
                     return res
                 take(p)
@@ -554,12 +566,10 @@ class ChannelWatcher:
                         for r in replies:
                             take(r)
                             after = r["post_id"]
-                        if len(replies) < PAGE:
+                        if not replies:
                             break
                 prev_id = p["post_id"]
             anchor = page[-1]["post_id"]
-            if len(page) < PAGE:
-                break
         return res
 
     def _start_collect(self, ch_here: dict, post: dict, cmd: dict) -> None:
@@ -597,6 +607,12 @@ class ChannelWatcher:
                 mb = r["bytes"] / 1024 / 1024
                 lines = [f"Done: {r['saved']} files collected from {name}{span} ({mb:.1f} MB).",
                          f"Saved in ACE/channel-files/{name}/<year>/<month>/<day>/"]
+                if r["checked"]:
+                    fmt = lambda ms: datetime.fromtimestamp(ms / 1000, self.tz).strftime("%d-%b-%Y")  # noqa: E731
+                    lines.append(f"I looked through {r['checked']} messages dated {fmt(r['first_at'])} "
+                                 f"to {fmt(r['last_at'])}, plus their threads.")
+                else:
+                    lines.append("I couldn't read any messages in that channel.")
                 if r["already"]:
                     lines.append(f"{r['already']} were already saved earlier (not duplicated).")
                 if r["skipped"]:
@@ -605,6 +621,7 @@ class ChannelWatcher:
                     lines.append(f"{r['failed']} could not be saved:")
                     lines += [f"- {e}" for e in r["errors"]]
                 audit("collect_done", channel=name, **{k: v for k, v in r.items() if k != "errors"})
+                log.info("collect %s: %s", name, {k: v for k, v in r.items() if k != "errors"})
                 self.stats["saved_today"] += r["saved"]
                 self.say(cid, "\n".join(lines), thread)
             except Exception as exc:  # noqa: BLE001

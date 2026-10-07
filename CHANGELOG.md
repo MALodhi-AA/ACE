@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.7 - 2026-10-07
+- Fix: Chat returns fewer messages per request than ACE asks for, and ACE took a short
+  page as "end of history". `collect files` therefore only read the oldest messages of a
+  busy channel (0 files for Oct 2026), and the starting point of big channels could be
+  too early. ACE now keeps reading until Chat has nothing newer.
+- After this update every chat starts again from its newest message (nothing old is
+  answered or saved by itself).
+- `collect files` reports how many messages it looked through and their date range.
+
 ## 0.4.6 - 2026-10-07
 - `collect files` understands plain words: "collect files from "PaymentTracker-MaraGroup"
   for the month of Oct 2026", "... last month", "... on 5 October 2026",
