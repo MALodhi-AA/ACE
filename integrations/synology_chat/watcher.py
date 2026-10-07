@@ -49,6 +49,49 @@ _MENTION_TOKEN = re.compile(r"@u:\d+\s*")
 _ACE_NAME = re.compile(r"^\s*@?ace\b[:,]?\s*", re.IGNORECASE)
 
 
+_COLLECT = re.compile(r"^collect\s+(?:old\s+)?files?\b(.*)$", re.IGNORECASE | re.DOTALL)
+_DATE = r"(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{4})"
+
+
+def parse_date(text: str):
+    from datetime import date
+    text = text.strip()
+    try:
+        if re.match(r"^\d{4}-", text):
+            y, m, d = (int(x) for x in text.split("-"))
+        else:
+            d, m, y = (int(x) for x in re.split(r"[/-]", text))
+        return date(y, m, d)
+    except ValueError:
+        return None
+
+
+def parse_collect(text: str) -> dict | None:
+    """'collect files [<channel>] [from <date>] [to <date>]' -> {'channel', 'from', 'to'}; None if not a collect command.
+    Raises ValueError for a bad date."""
+    m = _COLLECT.match(text.strip())
+    if not m:
+        return None
+    rest = m.group(1)
+    out = {"channel": "", "from": None, "to": None}
+    for key in ("from", "to"):
+        dm = re.search(rf"\b{key}\s+{_DATE}", rest, re.IGNORECASE)
+        if dm:
+            d = parse_date(dm.group(1))
+            if d is None:
+                raise ValueError(f"I couldn't read the date '{dm.group(1)}'. Use YYYY-MM-DD, e.g. 2026-09-01.")
+            out[key] = d
+            rest = rest.replace(dm.group(0), " ")
+    out["channel"] = re.sub(r"^\s*(?:in|from|of)\s+", "", rest).strip().strip('"').strip()
+    return out
+
+
+def day_folder(create_at_ms: int, tz) -> list[str]:
+    """Year / year-month / date, e.g. ['2026', '2026-10', '2026-10-07']."""
+    d = datetime.fromtimestamp((create_at_ms or 0) / 1000, tz)
+    return [d.strftime("%Y"), d.strftime("%Y-%m"), d.strftime("%Y-%m-%d")]
+
+
 def kind(ch: dict) -> str | None:
     """'channel', 'direct' (one-to-one with ACE), 'group' (conversation) or None (not handled)."""
     t = str(ch.get("type", "")).lower()
@@ -96,6 +139,9 @@ class ChannelWatcher:
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ace-chat-job")
         self._users: dict[int, str] = {}
         self._polls = 0
+        self._saved: dict[int, set[int]] = {}       # channel -> post ids already saved
+        self._channels: list[dict] = []
+        self._collecting = threading.Lock()
         me = settings.chat_user_id or self.state.get("_me", {}).get("id")
         if me and getattr(self.chat, "me", None) is None:
             self.chat.me = int(me)
@@ -159,6 +205,7 @@ class ChannelWatcher:
         if self.stats["day"] != today:
             self.stats.update(day=today, saved_today=0, answered_today=0)
         channels = self.watched(self.chat.channels())
+        self._channels = channels
         self.stats["channels"] = sum(1 for c in channels if kind(c) != "direct")
         self.stats["direct"] = len(channels) - self.stats["channels"]
         for ch in channels:
@@ -281,19 +328,15 @@ class ChannelWatcher:
         original = fp.get("name") or f"file_{pid}"
         size = int(fp.get("size") or 0)
         folder_name = self.folder_name(ch)
+        if pid in self._saved_ids(cid):
+            return True, 0                       # already collected
         if size > settings.chat_max_file_mb * 1024 * 1024:
             audit("channel_file_skipped", channel=folder_name, post_id=pid, file=original, size=size,
                   reason="too large")
             self._reply(cid, thread, f"Not saved: {original} is larger than {settings.chat_max_file_mb} MB.")
             return True, 0
-        month = datetime.fromtimestamp(post.get("create_at", 0) / 1000, self.tz).strftime("%Y-%m")
-        folder = [folder_name, month]
         try:
-            data = self.chat.download(pid)
-            if size and len(data) != size:
-                raise ChatError(f"incomplete download ({len(data)} of {size} bytes)")
-            name = free_name(self.store, folder, safe_name(original, f"file_{pid}"))
-            where = self.store.save(folder + [name], data)
+            name, where = self.store_file(ch, post)
         except Exception as exc:  # noqa: BLE001
             n = self.attempts.get(pid, 0) + 1
             self.attempts[pid] = n
@@ -306,11 +349,173 @@ class ChannelWatcher:
             self.attempts.pop(pid, None)
             return True, 0
         self.attempts.pop(pid, None)
-        audit("channel_file_saved", channel=folder_name, channel_id=cid, post_id=pid, file=original,
-              saved_as=where, size=len(data), shared_by=post.get("creator_id"))
-        log.info("saved %s -> %s", original, where)
         self._reply(cid, thread, f"Saved: {name} -> {where.replace(chr(92), '/')}")
         return True, 1
+
+    # --- saving files -------------------------------------------------------------------
+    def _saved_path(self, cid: int):
+        return self.state_path.parent / "saved" / f"{cid}.txt"
+
+    def _saved_ids(self, cid: int) -> set[int]:
+        if cid not in self._saved:
+            ids: set[int] = set()
+            try:
+                ids = {int(x) for x in self._saved_path(cid).read_text().split() if x.isdigit()}
+            except OSError:
+                pass
+            self._saved[cid] = ids
+        return self._saved[cid]
+
+    def _mark_saved(self, cid: int, pid: int) -> None:
+        self._saved_ids(cid).add(pid)
+        try:
+            path = self._saved_path(cid)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(f"{pid}\n")
+        except OSError as exc:
+            log.warning("could not record saved post: %s", exc)
+
+    def store_file(self, ch: dict, post: dict, how: str = "live") -> tuple[str, str]:
+        """Download a shared file and save it to <Channel>/<YYYY>/<YYYY-MM>/<YYYY-MM-DD>/ (never overwrites)."""
+        fp = post.get("file_props") or {}
+        pid = post["post_id"]
+        cid = int(ch["channel_id"])
+        original = fp.get("name") or f"file_{pid}"
+        size = int(fp.get("size") or 0)
+        folder = [self.folder_name(ch)] + day_folder(post.get("create_at", 0), self.tz)
+        data = self.chat.download(pid)
+        if size and len(data) != size:
+            raise ChatError(f"incomplete download ({len(data)} of {size} bytes)")
+        name = free_name(self.store, folder, safe_name(original, f"file_{pid}"))
+        where = self.store.save(folder + [name], data)
+        self._mark_saved(cid, pid)
+        audit("channel_file_saved", channel=folder[0], channel_id=cid, post_id=pid, file=original,
+              saved_as=where, size=len(data), shared_by=post.get("creator_id"), how=how)
+        log.info("saved %s -> %s (%s)", original, where, how)
+        return name, where
+
+    # --- collecting old files (manager instruction) -------------------------------
+    def is_admin(self, user_id) -> bool:
+        uid = str(user_id)
+        return any(a.lower() in {uid.lower(), self.username(uid).lower()} for a in settings.ace_admins)
+
+    def find_channel(self, name: str) -> dict | None:
+        want = name.strip().lower()
+        for ch in self._channels:
+            if want in {str(ch.get("channel_id")), str(ch.get("name") or "").lower(), self.folder_name(ch).lower()}:
+                return ch
+        return None
+
+    def collect(self, ch: dict, start=None, end=None) -> dict:
+        """Save every file shared in a channel (main messages and thread replies) between two dates."""
+        cid = int(ch["channel_id"])
+        lo = int(datetime.combine(start, datetime.min.time(), self.tz).timestamp() * 1000) if start else 0
+        hi = (int(datetime.combine(end, datetime.max.time(), self.tz).timestamp() * 1000) if end else 1 << 62)
+        res = {"saved": 0, "already": 0, "skipped": 0, "failed": 0, "bytes": 0, "errors": []}
+
+        def take(post: dict) -> None:
+            fp = post.get("file_props")
+            if post.get("type") != "file" or not fp or post.get("delete_at"):
+                return
+            if not lo <= post.get("create_at", 0) <= hi:
+                return
+            if post["post_id"] in self._saved_ids(cid):
+                res["already"] += 1
+                return
+            if int(fp.get("size") or 0) > settings.chat_max_file_mb * 1024 * 1024:
+                res["skipped"] += 1
+                return
+            try:
+                self.store_file(ch, post, how="collect")
+                res["saved"] += 1
+                res["bytes"] += int(fp.get("size") or 0)
+            except Exception as exc:  # noqa: BLE001
+                res["failed"] += 1
+                if len(res["errors"]) < 5:
+                    res["errors"].append(f"{fp.get('name')}: {exc}")
+
+        first = self.chat.first_post(cid)
+        if not first:
+            return res
+        prev_id, anchor, first_page = first["post_id"] - 1, first["post_id"], True
+        while True:
+            page = sorted((p for p in self.chat.posts(cid, anchor, next_count=PAGE)
+                           if first_page or p["post_id"] > anchor), key=lambda p: p["post_id"])
+            first_page = False
+            if not page:
+                break
+            for p in page:
+                if p.get("create_at", 0) > hi:
+                    return res
+                take(p)
+                if p.get("comment_count") and p.get("last_comment_at", 0) >= lo:
+                    rid, after = p["post_id"], prev_id
+                    while True:
+                        replies = sorted((r for r in self.chat.posts(cid, after, next_count=PAGE, thread_id=rid)
+                                          if r.get("thread_id") == rid and r["post_id"] not in (rid,)
+                                          and r["post_id"] > after), key=lambda r: r["post_id"])
+                        for r in replies:
+                            take(r)
+                            after = r["post_id"]
+                        if len(replies) < PAGE:
+                            break
+                prev_id = p["post_id"]
+            anchor = page[-1]["post_id"]
+            if len(page) < PAGE:
+                break
+        return res
+
+    def _start_collect(self, ch_here: dict, post: dict, cmd: dict) -> None:
+        cid = int(ch_here["channel_id"])
+        thread = post.get("thread_id") or None
+        uid = post.get("creator_id")
+        if not self.is_admin(uid):
+            audit("denied", command="collect files", user_id=uid)
+            self.say(cid, "Only my manager can ask me to collect old files.", thread)
+            return
+        target = ch_here
+        if cmd["channel"]:
+            target = self.find_channel(cmd["channel"])
+            if not target:
+                names = ", ".join(sorted(self.folder_name(c) for c in self._channels if kind(c) != "direct"))
+                self.say(cid, f"I'm not in a channel called '{cmd['channel']}'. I'm in: {names}", thread)
+                return
+        elif kind(ch_here) == "direct":
+            self.say(cid, "Which channel? e.g. collect files ACE-TEST from 2026-09-01 to 2026-09-30", thread)
+            return
+        span = (f" from {cmd['from']:%d-%b-%Y}" if cmd["from"] else "") + (f" to {cmd['to']:%d-%b-%Y}" if cmd["to"] else "")
+        if not self._collecting.acquire(blocking=False):
+            self.say(cid, "I'm already collecting files - I'll finish that first.", thread)
+            return
+        name = self.folder_name(target)
+        audit("collect_start", channel=name, by=uid, start=str(cmd["from"]), end=str(cmd["to"]))
+        self.say(cid, f"On it - collecting all files shared in {name}{span or ' (all dates)'}, "
+                      f"including threads. I'll tell you when I'm done.", thread)
+
+        def run() -> None:
+            try:
+                r = self.collect(target, cmd["from"], cmd["to"])
+                mb = r["bytes"] / 1024 / 1024
+                lines = [f"Done: {r['saved']} files collected from {name}{span} ({mb:.1f} MB).",
+                         f"Saved in ACE/channel-files/{name}/<year>/<month>/<day>/"]
+                if r["already"]:
+                    lines.append(f"{r['already']} were already saved earlier (not duplicated).")
+                if r["skipped"]:
+                    lines.append(f"{r['skipped']} skipped - larger than {settings.chat_max_file_mb} MB.")
+                if r["failed"]:
+                    lines.append(f"{r['failed']} could not be saved:")
+                    lines += [f"- {e}" for e in r["errors"]]
+                audit("collect_done", channel=name, **{k: v for k, v in r.items() if k != "errors"})
+                self.stats["saved_today"] += r["saved"]
+                self.say(cid, "\n".join(lines), thread)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("collect failed")
+                self.say(cid, f"Collecting stopped with an error: {exc}", thread)
+            finally:
+                self._collecting.release()
+
+        self._pool.submit(run)
 
     # --- conversation ---------------------------------------------------------------
     def _converse(self, ch: dict, post: dict) -> None:
@@ -323,6 +528,14 @@ class ChannelWatcher:
         where = "chat-direct" if kind(ch) == "direct" else f"chat-{kind(ch)}:{self.folder_name(ch)}"
         thread = post.get("thread_id") or None
         self.stats["answered_today"] += 1
+        try:
+            cmd = parse_collect(text)
+        except ValueError as exc:
+            self.say(cid, str(exc), thread)
+            return
+        if cmd is not None:
+            self._start_collect(ch, post, cmd)
+            return
         try:
             resp = handle(uid, self.username(uid), text or "help", where)
         except Exception as exc:  # noqa: BLE001

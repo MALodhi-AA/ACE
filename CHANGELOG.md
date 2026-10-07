@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.5 - 2026-10-07
+- Shared files are now saved in day folders:
+  `ACE/channel-files/<Channel>/<YYYY>/<YYYY-MM>/<YYYY-MM-DD>/<file>`.
+- New manager instruction `collect files [channel] [from YYYY-MM-DD] [to YYYY-MM-DD]`:
+  ACE goes back through a channel's history, including replies in threads, and saves
+  every file shared in that period. In a channel or thread: `@ACE collect files from ...`;
+  in a direct chat with ACE: `collect files <channel> from ...`. Only users in
+  `ACE_ADMINS` may use it. Files saved before are never saved twice. ACE replies with a
+  summary (files, MB, already saved, skipped, failed).
+
 ## 0.4.4 - 2026-10-07
 - Fix: when a thread that already had replies got a new one, ACE also answered the old
   replies. Replies from before ACE started following a thread are now always skipped.

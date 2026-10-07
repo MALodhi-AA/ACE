@@ -62,6 +62,8 @@ class Settings:
     # Comma-separated Synology Chat user_ids or usernames allowed to use the employee.
     # Empty = everyone in Chat may use it (status will warn).
     allowed_users: list[str] = field(default_factory=lambda: _list("ALLOWED_USERS"))
+    # Chat user_ids/usernames allowed to give manager instructions (e.g. collecting old files).
+    ace_admins: list[str] = field(default_factory=lambda: _list("ACE_ADMINS"))
 
     # --- Storage ------------------------------------------------------------
     # DATA_DIR holds inbox/, reports/ and logs/ unless each is overridden.

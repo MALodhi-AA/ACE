@@ -129,7 +129,7 @@ def help_text() -> str:
     lines = [
         f"{PROFILE['name']} ({PROFILE.get('full_name', '')}) - {PROFILE['role']}",
         "",
-        "Commands (in a direct message, or after /ace in a channel):",
+        "Commands (in a direct message to me, or with @ACE in a channel or thread):",
         "status - who I am, my skills and connected systems",
         "skills - skill details and versions",
         "ask <question> - ask me a finance/accounting question",
@@ -138,6 +138,8 @@ def help_text() -> str:
     for s in SKILLS.values():
         lines.append(f"{s.usage} - {s.name}")
     lines += [
+        "collect files [channel] [from YYYY-MM-DD] [to YYYY-MM-DD] - manager only: save old files",
+        "  shared in a channel (incl. threads) into year/month/day folders",
         "whoami - show your Chat user id (for permissions)",
         "reset - clear our conversation memory",
         "",

@@ -79,7 +79,7 @@ def test_new_file_is_saved_and_acknowledged(setup):
     chat.new(post(4))
     chat.new(post(5, "file", "Food Box TB Sep.xlsx"))
     assert w.poll_once() == 1
-    saved = tmp / "files" / "ACE-TEST" / "2026-10" / "Food Box TB Sep.xlsx"
+    saved = tmp / "files" / "ACE-TEST" / "2026" / "2026-10" / "2026-10-07" / "Food Box TB Sep.xlsx"
     assert saved.read_bytes() == b"abc"
     assert chat.sent[-1][1] == BASE + 5      # reply in the file's thread
     assert "Saved: Food Box TB Sep.xlsx" in chat.sent[-1][2]
@@ -93,7 +93,7 @@ def test_same_name_is_versioned_never_overwritten(setup):
     chat.new(post(4, "file", "TB.xlsx"))
     chat.new(post(5, "file", "TB.xlsx"))
     assert w.poll_once() == 2
-    folder = tmp / "files" / "ACE-TEST" / "2026-10"
+    folder = tmp / "files" / "ACE-TEST" / "2026" / "2026-10" / "2026-10-07"
     assert sorted(p.name for p in folder.iterdir()) == ["TB.xlsx", "TB_v2.xlsx"]
 
 
@@ -301,7 +301,7 @@ def test_files_and_mentions_inside_threads(tmp_path):
     chat.me = 189
     for _ in range(2):
         w.poll_once()
-    saved = tmp_path / "files" / "ACE-TEST" / "2026-10" / "Cred invoice 11 sep 2026_2.png"
+    saved = tmp_path / "files" / "ACE-TEST" / "2026" / "2026-10" / "2026-10-07" / "Cred invoice 11 sep 2026_2.png"
     assert saved.exists()
     texts = [(t, txt) for _, t, txt in chat.sent]
     assert any(t == BASE + 3 and txt.startswith("Saved:") for t, txt in texts)    # reply in the thread
@@ -321,5 +321,84 @@ def test_new_thread_after_start_is_followed(tmp_path):
     w.poll_once(); w.poll_once()
     chat.comment(2, 3, name="b.pdf")
     w.poll_once(); w.poll_once()
-    folder = tmp_path / "files" / "ACE-TEST" / "2026-10"
+    folder = tmp_path / "files" / "ACE-TEST" / "2026" / "2026-10" / "2026-10-07"
     assert sorted(p.name for p in folder.iterdir()) == ["a.pdf", "b.pdf"]
+
+
+# --- v0.5.0: day folders and collecting old files on instruction ------------------------
+from datetime import date  # noqa: E402
+
+from app.config import settings  # noqa: E402
+from integrations.synology_chat.watcher import parse_collect  # noqa: E402
+
+DAY = 86_400_000
+
+
+class HistoryChat(ThreadChat):
+    def first_post(self, cid):
+        ps = sorted((p for p in self.all if p["channel_id"] == cid and p.get("thread_id") in (0, None, p["post_id"])),
+                    key=lambda p: p["post_id"])
+        return ps[0] if ps else None
+
+
+def test_parse_collect():
+    assert parse_collect("whoami") is None
+    c = parse_collect("collect files from 2026-09-01 to 30/09/2026")
+    assert c == {"channel": "", "from": date(2026, 9, 1), "to": date(2026, 9, 30)}
+    c = parse_collect("Collect files ACE-TEST from 2026-09-01")
+    assert c["channel"] == "ACE-TEST" and c["from"] == date(2026, 9, 1) and c["to"] is None
+    with pytest.raises(ValueError):
+        parse_collect("collect files from 2026-13-45")
+
+
+@pytest.fixture
+def history(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "ace_admins", ["5"])
+    t0 = 1788220800000                                    # 2026-09-01 04:00 Dubai
+    chat = HistoryChat([post(1, "system", at=t0 - 10 * DAY),
+                        post(2, "file", "august.pdf", at=t0 - 5 * DAY),
+                        post(3, "file", "sep1.pdf", at=t0),
+                        post(4, "normal", at=t0 + DAY),
+                        post(5, "file", "sep10.xlsx", at=t0 + 9 * DAY)])
+    chat.comment(4, 6, name="in-thread.png")
+    chat.all[-1]["create_at"] = t0 + 2 * DAY
+    root = next(p for p in chat.all if p["post_id"] == BASE + 4)
+    root["last_comment_at"] = t0 + 2 * DAY
+    w = ChannelWatcher(chat, store=LocalStore(tmp_path / "files"), state_path=tmp_path / "s.json", tz="Asia/Dubai")
+    w.poll_once(); w.poll_once(); w.poll_once()          # nothing old is saved by itself
+    assert not (tmp_path / "files").exists()
+    return chat, w, tmp_path / "files" / "ACE-TEST"
+
+
+def files_under(root):
+    return sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file())
+
+
+def test_collect_by_date_with_threads_in_day_folders(history):
+    chat, w, root = history
+    r = w.collect(w.find_channel("ace-test"), date(2026, 9, 1), date(2026, 9, 30))
+    assert r["saved"] == 3
+    assert files_under(root) == ["2026/2026-09/2026-09-01/sep1.pdf",
+                                 "2026/2026-09/2026-09-03/in-thread.png",
+                                 "2026/2026-09/2026-09-10/sep10.xlsx"]
+    r = w.collect(w.find_channel("ACE-TEST"))             # all dates: only august is new
+    assert r["saved"] == 1 and r["already"] == 3
+
+
+def test_collect_command_from_direct_chat_and_permissions(history):
+    chat, w, root = history
+    chat.new(msg(DM, 2, "collect files ACE-TEST from 2026-09-01 to 2026-09-05"))
+    w.poll_once()
+    w._pool.shutdown(wait=True)
+    assert files_under(root) == ["2026/2026-09/2026-09-01/sep1.pdf", "2026/2026-09/2026-09-03/in-thread.png"]
+    assert chat.sent[-1][0] == DM and chat.sent[-1][2].startswith("Done: 2 files collected from ACE-TEST")
+
+
+def test_collect_needs_admin(history, monkeypatch):
+    chat, w, root = history
+    monkeypatch.setattr(settings, "ace_admins", ["7"])
+    chat.new(msg(CID, 7, "@u:189 collect files", mentions=[189]))
+    chat.me = 189
+    w.poll_once()
+    assert "Only my manager" in chat.sent[-1][2]
+    assert not root.exists()

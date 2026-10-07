@@ -134,7 +134,11 @@ ACE can also be a member of Synology Chat channels, with its own Chat account
 ACE also answers through this account: send it a direct message, or write `@ACE ...`
 in a channel (same commands as the bot). In channels it only reacts when mentioned.
 
-ACE starts from the newest post when it first sees a channel (no old files). Remove ACE
+Files are saved by day: `ACE/channel-files/<Channel>/<YYYY>/<YYYY-MM>/<YYYY-MM-DD>/`.
+ACE starts from the newest post when it first sees a channel (no old files). To fetch old
+files, set `ACE_ADMINS=<your user_id>` in `.env` and tell ACE, e.g.
+`@ACE collect files from 2026-09-01 to 2026-09-30` in the channel, or
+`collect files ACE-TEST from 2026-09-01` in your direct chat with ACE. Remove ACE
 from a channel, or list it in `CHAT_IGNORE_CHANNELS`, to stop it saving there.
 Tell staff that ACE saves files shared in the channels it is in.
 
