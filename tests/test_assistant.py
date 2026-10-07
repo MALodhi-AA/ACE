@@ -355,7 +355,8 @@ def test_attendance_and_team_tasks_in_digest_and_commands(office_att):
     past = datetime(2026, 10, 5, 12, 0, tzinfo=UTC).replace(tzinfo=None)
     db.tasks = [bot_task("T2610-001", "Mara Q3 VAT return", 2, status="overdue", due=past),
                 bot_task("T2610-002", "Volt bank rec", 3, extension_status="pending"),
-                bot_task("T2610-003", "Food Box MIS", 2, status="blocked")]
+                bot_task("T2610-003", "Food Box MIS", 2, status="blocked"),
+                bot_task("T2604-082", "VAT Filing", 1, status="submitted", due=past)]   # with the reviewer
     say(MA, "who is in")
     a = last_to(chat, DM_MA)
     assert "Attendance today: 2 of 3 checked in" in a and "Late: Ali (11:42, +42 min)" in a
@@ -365,7 +366,8 @@ def test_attendance_and_team_tasks_in_digest_and_commands(office_att):
     assert p.startswith("Ali today: checked in 11:42 (+42 min late)") and "T2610-001 Mara Q3 VAT return - overdue" in p
     db.failures = {"hour": 40000, "day": 900000}
     d = w.assistant.digest_text()
-    assert "Team tasks (task bot): 3 open, 1 overdue" in d and "Extension requests waiting: 1" in d
+    assert "Team tasks (task bot): 4 open, 1 overdue" in d and "Extension requests waiting: 1" in d
+    assert "Submitted, waiting for review: 1" in d                 # past due but not counted as overdue
     assert "Warning: the task bot failed to deliver" in d and "My follow-ups:" in d
     say(MA, "bot errors")
     assert "create post too fast" in last_to(chat, DM_MA)

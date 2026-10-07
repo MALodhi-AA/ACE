@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.3 - 2026-10-08
+- Overdue no longer counts tasks marked "submitted": that work is with the reviewer, not late with
+  the staff member. Submitted tasks are still listed under "Submitted, waiting for review".
+
 ## 0.7.2 - 2026-10-08
 Questions about other days, and a fix for "My AI model is not available right now (BadRequestError)".
 - Attendance for any day: "who checked in late yesterday?", "attendance on Monday", "who was absent

@@ -189,7 +189,9 @@ class Bot:
             end_today = datetime.combine(datetime.now(_local_tz()).date(), time(23, 59), _local_tz())
             return {
                 "open": open_rows,
-                "overdue": [r for r in open_rows if r["status"] == "overdue" or (r["due"] and r["due"] < nowu)],
+                # submitted work is with the reviewer, not late with the staff member
+                "overdue": [r for r in open_rows if r["status"] != "submitted"
+                            and (r["status"] == "overdue" or (r["due"] and r["due"] < nowu))],
                 "due_today": [r for r in open_rows if r["due"] and nowu <= r["due"] <= end_today],
                 "blocked": [r for r in open_rows if r["status"] == "blocked"],
                 "eta_waiting": [r for r in open_rows if r["eta_status"] == "proposed"],
