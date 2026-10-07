@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1 - 2026-10-07
+- Follow-ups without a time now go out at the start of working hours (WORK_START, e.g.
+  11:00) instead of a fixed 10:00, matching the attendance system's hours.
+
 ## 0.5.0 - 2026-10-07
 Tasks and follow-ups - ACE as Sir Muhammad Ali's assistant.
 - Instructions in plain words from Sir Muhammad Ali (ACE_ADMINS only), in his direct chat

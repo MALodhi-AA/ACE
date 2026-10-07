@@ -114,7 +114,7 @@ def next_reminder(task: dict, after: datetime, hours: Hours) -> datetime | None:
     if mode == "hours":
         every = float(task.get("follow_every") or 24)
         return hours.next_open(after + timedelta(hours=every))
-    at = time.fromisoformat(task.get("follow_time") or "10:00")
+    at = time.fromisoformat(task.get("follow_time") or f"{settings.work_start:%H:%M}")
     if mode == "daily":
         return hours.next_at(after, at)
     # default: on the due date (or the next working day without one), then daily

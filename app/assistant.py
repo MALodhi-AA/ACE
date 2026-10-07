@@ -67,8 +67,8 @@ def follow_text(t: dict) -> str:
     if mode == "hours":
         return f"every {t.get('follow_every'):g} working hours until done"
     if mode == "daily":
-        return f"daily at {t.get('follow_time') or '10:00'} until done"
-    return f"on the due date at {t.get('follow_time') or '10:00'}, then daily until done"
+        return f"daily at {t.get('follow_time') or f'{settings.work_start:%H:%M}'} until done"
+    return f"on the due date at {t.get('follow_time') or f'{settings.work_start:%H:%M}'}, then daily until done"
 
 
 class Assistant:
@@ -215,8 +215,8 @@ into a task for a staff member. Reply with ONE JSON object only, no other text:
  "follow_up": {{"mode": "default|daily|hours|none", "time": "HH:MM or null", "every_hours": number or null}},
  "escalate_at": "YYYY-MM-DD HH:MM or null",
  "unclear": "what is missing or ambiguous, or null"}}
-Rules: today is {today:%A %d %B %Y %H:%M} ({settings.timezone}). Working days Mon-Fri.
-"by Thursday" means the coming Thursday. "follow up daily" -> mode daily (time 10:00 unless given);
+Rules: today is {today:%A %d %B %Y %H:%M} ({settings.timezone}). Working hours {settings.work_start:%H:%M}-{settings.work_end:%H:%M} on working days.
+"by Thursday" means the coming Thursday. "follow up daily" -> mode daily (time null unless a time is given - ACE then uses the start of working hours, {settings.work_start:%H:%M});
 "every 2 hours" -> mode hours; no follow-up words -> mode default; "don't follow up" -> none.
 "ask when he checks in" -> when checkin, otherwise now. "tell me if not done by X" -> escalate_at.
 Delivery: "privately"/"in private" -> private; "in <channel>"/"in the group" -> channel.

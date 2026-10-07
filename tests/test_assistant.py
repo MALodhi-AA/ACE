@@ -227,7 +227,7 @@ def test_hours_helpers():
     assert h.next_at(fri_eve, time(10, 0)) == datetime(2026, 10, 12, 10, 0, tzinfo=TZ)
     t = {"status": "open", "follow_mode": "hours", "follow_every": 2}
     assert T.next_reminder(t, datetime(2026, 10, 7, 17, 0, tzinfo=TZ), h) == datetime(2026, 10, 8, 9, 0, tzinfo=TZ)
-    t = {"status": "open", "follow_mode": "default", "due": "2026-10-09"}
-    assert T.next_reminder(t, datetime(2026, 10, 7, 11, 0, tzinfo=TZ), h) == datetime(2026, 10, 9, 10, 0, tzinfo=TZ)
+    t = {"status": "open", "follow_mode": "default", "due": "2026-10-09"}       # default: start of work
+    assert T.next_reminder(t, datetime(2026, 10, 7, 11, 0, tzinfo=TZ), h) == datetime(2026, 10, 9, 9, 0, tzinfo=TZ)
     assert T.parse_ref("approve t-12") == 12
     assert timedelta(0) <= timedelta(0)
