@@ -292,54 +292,61 @@ def compare(ctx: Ctx, company: str, p: dict) -> Result:
 
 
 def report(ctx: Ctx, company: str, p: dict) -> Result:
+    """Trial Balance or ledger balances as a branded Excel file (Accountability house style)."""
     from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill
 
+    from app.brand import AED, Sheet, save
     from app.storage import free_name
     kind = (p.get("kind") or "trial_balance").lower()
     as_of = date.fromisoformat(p["as_of"]) if p.get("as_of") else ctx.today
     frm = ctx.fy_start(company, as_of)
+    client = ctx.label(company)
+    sub = (f"{company} | Financial year from {frm:%d-%b-%Y} | as at {as_of:%d-%b-%Y} | AED | Source: Tally (read-only) | "
+           f"Prepared by ACE (Accountability's Chief Examiner) | DRAFT FOR REVIEW")
     wb = Workbook()
-    ws = wb.active
     if kind == "trial_balance":
-        ws.title = "Trial Balance"
-        ws.append(["Particulars", "Debit", "Credit"])
-        rows = ctx.tally.trial_balance(company, frm, as_of)
-        for name, v in rows:
-            ws.append([name, -v if v < 0 else None, v if v > 0 else None])
+        sh = Sheet(wb, "Trial Balance", f"Trial Balance - {client} - {as_of:%d %b %Y}", sub, [50, 20, 20], first=True)
+        sh.header(["Particulars", "Debit", "Credit"])
+        dr = cr = 0.0
+        for name, v in ctx.tally.trial_balance(company, frm, as_of):
+            sh.line([name, -v if v < 0 else None, v if v > 0 else None], [None, AED, AED])
+            dr += -v if v < 0 else 0
+            cr += v if v > 0 else 0
+        sh.line(["Total", dr, cr], [None, AED, AED], "total")
+        if abs(dr - cr) >= 0.01:
+            sh.note(f"Difference {dr - cr:,.2f} - check opening balances / closing stock in Tally.")
+        engagement = "Trial Balance"
     elif kind == "ledger_balances":
-        ws.title = "Ledger balances"
-        ws.append(["Ledger", "Group", "Debit", "Credit"])
-        for l in sorted(ctx.ledgers(company, frm, as_of), key=lambda l: (l.parent.lower(), l.name.lower())):
-            if abs(l.closing) >= 0.005:
-                ws.append([l.name, l.parent, -l.closing if l.closing < 0 else None, l.closing if l.closing > 0 else None])
+        sh = Sheet(wb, "Ledger balances", f"Ledger Balances - {client} - {as_of:%d %b %Y}", sub, [45, 30, 20, 20],
+                   first=True)
+        sh.header(["Ledger", "Group", "Debit", "Credit"])
+        rows = [l for l in ctx.ledgers(company, frm, as_of) if abs(l.closing) >= 0.005]
+        dr = cr = 0.0
+        for group in sorted({l.parent for l in rows}, key=str.lower):
+            sh.band(group or "(no group)")
+            gdr = gcr = 0.0
+            for l in sorted((l for l in rows if l.parent == group), key=lambda l: l.name.lower()):
+                d, c = (-l.closing, None) if l.closing < 0 else (None, l.closing)
+                sh.line([l.name, group, d, c], [None, None, AED, AED])
+                gdr += d or 0
+                gcr += c or 0
+            sh.line([f"Total {group}", "", gdr or None, gcr or None], [None, None, AED, AED], "subtotal")
+            dr, cr = dr + gdr, cr + gcr
+        sh.line(["Total", "", dr, cr], [None, None, AED, AED], "total")
+        sh.note("Ledger closing balances from Tally; closing stock is not a ledger and is not included.")
+        engagement = "Ledger Balances"
     else:
         raise CheckError(f"unknown report '{kind}' (trial_balance, ledger_balances)")
-    n = ws.max_row
-    ws.append([])
-    ws.append(["Total", f"=SUM(B2:B{n})", f"=SUM(C2:C{n})"] if kind == "trial_balance"
-              else ["Total", "", f"=SUM(C2:C{n})", f"=SUM(D2:D{n})"])
-    for cell in ws[1]:
-        cell.font = Font(bold=True, color="FFFFFF", name="Arial")
-        cell.fill = PatternFill("solid", fgColor="002D49")
-    ws.column_dimensions["A"].width = 45
-    for c in "BCD":
-        ws.column_dimensions[c].width = 18
-    for row in ws.iter_rows(min_row=2):
-        for cell in row[1:]:
-            cell.number_format = "#,##0.00"
-    title = f"{ctx.label(company)} - {kind.replace('_', ' ').title()} {as_of:%Y-%m-%d}.xlsx"
-    title = re.sub(r'[\\/:*?"<>|]', "-", title)
-    folder = ["reports", re.sub(r'[\\/:*?"<>|]', "-", ctx.label(company))]
-    buf = io.BytesIO()
-    wb.save(buf)
+    sh.footer(client, engagement)
+    title = re.sub(r'[\\/:*?"<>|]', "-", f"{client} - {engagement} {as_of:%Y-%m-%d}.xlsx")
+    folder = ["reports", re.sub(r'[\\/:*?"<>|]', "-", client)]
     store = ctx.store
     if store is None:
         from app.tally_register import _store
         store = _store()
     name = free_name(store, folder, title)
-    where = store.save(folder + [name], buf.getvalue())
-    return Result("info", f"{kind.replace('_', ' ')} as at {as_of:%d %b %Y} saved", file=where)
+    where = store.save(folder + [name], save(wb))
+    return Result("info", f"{engagement.lower()} as at {as_of:%d %b %Y} saved", file=where)
 
 
 def ask(ctx: Ctx, company: str, p: dict) -> Result:

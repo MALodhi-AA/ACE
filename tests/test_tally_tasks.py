@@ -47,6 +47,10 @@ class FakeTally:
         self.calls.append(("dates", company, frm, to, extra))
         return [date(2026, 10, 5)] if company == CO else [date(2026, 8, 1)]
 
+    def last_voucher_date(self, company, frm=None, to=None):
+        d = self.voucher_dates(company, frm, to)
+        return d[-1] if d else None
+
     def vouchers(self, company, frm, to):
         if frm > TODAY:
             return [v for v in self.future if company == CO]
@@ -103,7 +107,13 @@ def test_checks_find_problems(ft, tmp_path):
     r = run_check(ctx, "report", CO, {"kind": "trial_balance"})
     assert r.status == "info" and r.file.endswith("Mara Lounge Al Wasl (E-1) - Trial Balance 2026-10-07.xlsx")
     ws = load_workbook(r.file).active
-    assert ws["A2"].value == "Capital Account" and ws["C2"].value == 5000.0 and ws["B3"].value == 5000.0
+    assert ws["A1"].value.startswith("Trial Balance - Mara Lounge Al Wasl (E-1)")            # branded title bar
+    assert ws["A1"].fill.start_color.rgb.endswith("002D49") and ws["A5"].fill.start_color.rgb.endswith("174D51")
+    assert ws["A5"].value == "Particulars" and ws["A1"].font.name == "Arial" and not ws.sheet_view.showGridLines
+    assert ws["A6"].value == "Capital Account" and ws["C6"].value == 5000.0 and ws["B7"].value == 5000.0
+    assert ws["A8"].value == "Total" and ws["B8"].value == ws["C8"].value == 5000.0
+    assert ws["B8"].border.bottom.style == "double"
+    assert ws.oddFooter.left.text.startswith("Accountability Accountants - Mara Lounge Al Wasl (E-1) - Trial Balance")
 
 
 def test_register_draft_and_load(ft, tmp_path):
@@ -111,15 +121,17 @@ def test_register_draft_and_load(ft, tmp_path):
     where, n = draft(ft, store=store, today=TODAY)
     assert n == 2 and where.endswith("Client Register (draft) 2026-10-07.xlsx")
     ws = load_workbook(where).worksheets[0]
-    row = [c.value for c in ws[2]]
+    assert ws["A5"].value == "Tally company" and ws["A1"].fill.start_color.rgb.endswith("002D49")
+    row = [c.value for c in ws[6]]
+    assert ws["D6"].fill.start_color.rgb.endswith("FFFF00")                 # staff to be filled in
     assert row[0] == CO and row[1] == "Mara Lounge Al Wasl" and row[7] == "1-Jan"
-    assert row[9] == "Emirates NBD" and row[10] == "Cash" and row[11] == "Suspense A/c"
+    assert row[9] == "Emirates NBD" and row[10] == "Cash" and row[11] == "Suspense A/c" and row[12] == "05 Oct 2026"
     assert draft(ft, store=store, today=TODAY)[0].endswith("2026-10-07_v2.xlsx")       # never overwrites
 
     wb = load_workbook(where)
-    wb.worksheets[0]["B2"] = "Al Wasl"
-    wb.worksheets[0]["D2"] = "Aiman"
-    wb.worksheets[0]["C3"] = "N"
+    wb.worksheets[0]["B6"] = "Al Wasl"
+    wb.worksheets[0]["D6"] = "Aiman"
+    wb.worksheets[0]["C7"] = "N"
     wb.save(tmp_path / REGISTER)
     reg = load(store)
     assert reg[CO].short == "Al Wasl" and reg[CO].staff == "Aiman" and not reg[CO2].include
@@ -219,3 +231,18 @@ def test_tally_not_connected(office):  # noqa: F811
     chat, w, replies, clock, say = office
     say(MA, "tally tasks")
     assert last_to(chat, DM_MA) == "Tally is not connected (set TALLY_URL in .env)."
+
+
+def test_logo_goes_top_left_when_available(tmp_path):
+    import io
+
+    from openpyxl import Workbook
+    from PIL import Image
+
+    from app.brand import Sheet
+    buf = io.BytesIO()
+    Image.new("RGB", (200, 60), "white").save(buf, format="PNG")
+    wb = Workbook()
+    sh = Sheet(wb, "S", "Title", "sub", [20, 20], first=True, logo_bytes=buf.getvalue())
+    sh.header(["a", "b"])
+    assert len(sh.ws._images) == 1 and sh.ws["A2"].value == "Title" and sh.ws["A6"].value == "a"

@@ -12,21 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
+from openpyxl.styles import Alignment, Font
 
+from app.brand import AED0 as AED, BLUE, F, GREEN, PCT, SEV_FILL, Sheet  # noqa: F401 - house style (v0.8.1)
 from skills.monthly_mis.engine import PERIOD_LABELS, PL_LAYOUT
-
-NAVY, TEAL, GREEN, BLUE = "002D49", "174D51", "7DB343", "0A8FD0"
-NAVY_TINT, GREEN_TINT, GREY = "DCE6EE", "EAF3DC", "595959"
-SEV_FILL = {"High": "F8CBAD", "Medium": "FFE699", "Low": "EAF3DC"}
-AED = '#,##0;(#,##0);"-"'
-PCT = '0.0%;(0.0%);"-"'
-F = "Arial"
-
-
-def _fill(c):
-    return PatternFill("solid", start_color=c, end_color=c)
 
 
 def _safe(s: str) -> str:
@@ -39,81 +28,6 @@ def next_version_parts(store, folder: list[str], stem: str) -> list[str]:
     while store.exists(folder + [f"{stem}_v{n}.xlsx"]):
         n += 1
     return folder + [f"{stem}_v{n}.xlsx"]
-
-
-class Sheet:
-    def __init__(self, wb: Workbook, title: str, heading: str, subtitle: str, widths: list[int], tab=NAVY, first=False):
-        self.ws = wb.active if first else wb.create_sheet()
-        self.ws.title = title
-        self.ws.sheet_properties.tabColor = tab
-        self.ws.sheet_view.showGridLines = False
-        for i, w in enumerate(widths, 1):
-            self.ws.column_dimensions[get_column_letter(i)].width = w
-        n = len(widths)
-        self.ncol = n
-        self.ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n)
-        c = self.ws.cell(1, 1, heading)
-        c.font = Font(name=F, size=14, bold=True, color="FFFFFF")
-        c.fill = _fill(NAVY)
-        c.alignment = Alignment(vertical="center", indent=1)
-        for col in range(1, n + 1):
-            self.ws.cell(1, col).fill = _fill(NAVY)
-        self.ws.row_dimensions[1].height = 28
-        s = self.ws.cell(2, 1, subtitle)
-        s.font = Font(name=F, size=9, italic=True, color=GREY)
-        for col in range(1, n + 1):
-            self.ws.cell(3, col).fill = _fill(GREEN)
-        self.ws.row_dimensions[3].height = 4
-        self.row = 5
-        ps = self.ws.page_setup
-        ps.orientation = "landscape"
-        ps.fitToWidth = 1
-        ps.fitToHeight = 0
-        self.ws.sheet_properties.pageSetUpPr.fitToPage = True
-
-    def header(self, labels: list[str], freeze=True):
-        for i, lab in enumerate(labels, 1):
-            c = self.ws.cell(self.row, i, lab)
-            c.font = Font(name=F, size=10, bold=True, color="FFFFFF")
-            c.fill = _fill(TEAL)
-            c.alignment = Alignment(wrap_text=True, vertical="center", horizontal="left" if i == 1 else "center")
-        self.ws.row_dimensions[self.row].height = 30
-        if freeze:
-            self.ws.freeze_panes = self.ws.cell(self.row + 1, 2)
-        self.row += 1
-
-    def band(self, text: str):
-        for col in range(1, self.ncol + 1):
-            self.ws.cell(self.row, col).fill = _fill(GREEN_TINT)
-        c = self.ws.cell(self.row, 1, text)
-        c.font = Font(name=F, size=10, bold=True, color=NAVY)
-        self.row += 1
-
-    def line(self, values: list[Any], fmts: list[str | None] | None = None, style: str = "line", fills: dict[int, str] | None = None):
-        bold = style in ("subtotal", "total")
-        for i, v in enumerate(values, 1):
-            c = self.ws.cell(self.row, i, v)
-            c.font = Font(name=F, size=10, bold=bold, color=NAVY if bold else "000000")
-            if fmts and i - 1 < len(fmts) and fmts[i - 1]:
-                c.number_format = fmts[i - 1]
-            if isinstance(v, str) and i > 1:
-                c.alignment = Alignment(wrap_text=True, vertical="top")
-            if style == "subtotal":
-                c.fill = _fill(NAVY_TINT)
-            if style == "total":
-                c.border = Border(top=Side("thin", color=NAVY), bottom=Side("double", color=NAVY))
-            if fills and i in fills:
-                c.fill = _fill(fills[i])
-        self.row += 1
-
-    def note(self, text: str):
-        c = self.ws.cell(self.row, 1, text)
-        c.font = Font(name=F, size=9, italic=True, color=GREY)
-        self.row += 1
-
-    def footer(self, company: str):
-        self.ws.oddFooter.left.text = f"Accountability Accountants - {company} - Monthly MIS - &P/&N"
-        self.ws.oddFooter.left.font = "Arial"
 
 
 def _var_pct(a, b):

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.1 - 2026-10-09
+Every document ACE produces uses the Accountability Accountants house style.
+- app/brand.py: shared house style (navy title bar, grey sub-title, green accent line, teal headers,
+  green-tint bands, navy-tint subtotals, double-underlined totals, Arial, gridlines off, landscape
+  fit-to-width, footer "Accountability Accountants - <client> - <engagement> - page/pages",
+  yellow = to be completed). The firm logo is placed top-left on the first sheet when
+  ACE/branding/logo.png exists on the NAS.
+- Applied to: client register draft, Tally Trial Balance / ledger balance reports (now with group
+  bands, subtotals and totals as values), and the Monthly MIS report (now shares app/brand.py).
+- employee.yaml persona and DEVELOPMENT.md state the rule for all future documents.
+
 ## 0.8.0 - 2026-10-09
 Tally tasks - a flexible way for Sir Muhammad Ali to tell ACE what to check in Tally (read-only).
 - Client register: "draft client register" builds ACE/tally/Client Register (draft) <date>.xlsx from

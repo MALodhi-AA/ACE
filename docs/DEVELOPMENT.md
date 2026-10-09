@@ -1,5 +1,14 @@
 # Development notes
 
+## House style for documents (v0.8.1)
+
+Every file ACE writes must use the Accountability Accountants branding. Build Excel output with
+`app.brand.Sheet` (navy title bar, grey sub-title, green accent line, teal headers, green-tint bands,
+navy-tint subtotals, double-underlined totals, Arial, gridlines off, landscape, firm footer) and the
+formats `AED` / `AED0` / `PCT`. Put the firm logo top-left on the first sheet: `Sheet(..., first=True)`
+does it automatically when `ACE/branding/logo.png` exists on the NAS. Never redraw the logo. Yellow
+fill = to be completed by the team. Word / PDF / HTML outputs (when added) follow the same colours.
+
 ## Running the tests
 
 ```bash

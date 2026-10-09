@@ -95,8 +95,10 @@ def load(store=None) -> dict[str, Client]:
     from openpyxl import load_workbook
     ws = load_workbook(io.BytesIO(data), read_only=True, data_only=True).worksheets[0]
     rows = list(ws.iter_rows(values_only=True))
-    if not rows:
+    start = next((i for i, r in enumerate(rows) if r and str(r[0] or "").strip().lower() == "tally company"), None)
+    if start is None:
         return {}
+    rows = rows[start:]                                   # branded sheets have a title block above the headers
     head = [str(h or "").strip().lower() for h in rows[0]]
 
     def col(r, name):
@@ -139,17 +141,19 @@ def find_roles(ledgers, groups: dict[str, str]) -> dict[str, list[str]]:
 def draft(tally, store=None, today: date | None = None, existing: dict[str, Client] | None = None) -> tuple[str, int]:
     """Build the draft register from Tally. Returns (where it was saved, number of companies)."""
     from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Font, PatternFill
 
+    from app.brand import BLUE, GREEN, YELLOW, Sheet, save
     from app.storage import free_name
     store = store or _store()
     today = today or date.today()
     existing = existing if existing is not None else load(store)
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Clients"
-    ws.append(COLUMNS)
     companies = sorted(tally.companies(), key=lambda c: c["name"].lower())
+    wb = Workbook()
+    sh = Sheet(wb, "Clients", "Client Register - Tally companies",
+               f"Drafted by ACE from Tally on {today:%d-%b-%Y} | {len(companies)} companies | yellow cells: to be "
+               f"completed by the team | save as '{REGISTER}' in ACE/tally",
+               [38, 22, 9, 20, 20, 12, 18, 9, 18, 40, 30, 30, 16, 30], first=True)
+    sh.header(COLUMNS)
     for c in companies:
         name = c["name"]
         old = existing.get(name)
@@ -160,38 +164,33 @@ def draft(tally, store=None, today: date | None = None, existing: dict[str, Clie
         except Exception as exc:  # noqa: BLE001
             log.warning("register draft %s: %s", name, exc)
         fy = c.get("starting_from")
-        ws.append([name,
-                   old.short if old else re.sub(r"\s*\((?:E-\d+|c)\)\s*", " ", name).strip(),
-                   ("Y" if old.include else "N") if old else "Y",
-                   old.staff if old else "", old.manager if old else "",
-                   old.vat_period if old else "", old.vat_quarter_ends if old else "",
-                   old.fy_start if old and old.fy_start else (f"{fy.day}-{fy:%b}" if fy else ""),
-                   old.trn if old else "",
-                   "; ".join(roles["bank"]), "; ".join(roles["cash"]), "; ".join(roles["suspense"]),
-                   f"{last:%d %b %Y}" if last else "none in 2 years",
-                   old.notes if old else ""])
-    navy = PatternFill("solid", fgColor="002D49")
-    for cell in ws[1]:
-        cell.font = Font(bold=True, color="FFFFFF", name="Arial")
-        cell.fill = navy
-        cell.alignment = Alignment(wrap_text=True, vertical="top")
-    widths = [38, 22, 9, 20, 20, 12, 18, 9, 18, 40, 30, 30, 16, 30]
-    for i, w in enumerate(widths):
-        ws.column_dimensions[chr(65 + i)].width = w
-    ws.freeze_panes = "B2"
-    h = wb.create_sheet("How to fill")
-    h.append(["Column", "What to put"])
+        values = [name,
+                  old.short if old else re.sub(r"\s*\((?:E-\d+|c)\)\s*", " ", name).strip(),
+                  ("Y" if old.include else "N") if old else "Y",
+                  old.staff if old else "", old.manager if old else "",
+                  old.vat_period if old else "", old.vat_quarter_ends if old else "",
+                  old.fy_start if old and old.fy_start else (f"{fy.day}-{fy:%b}" if fy else ""),
+                  old.trn if old else "",
+                  "; ".join(roles["bank"]), "; ".join(roles["cash"]), "; ".join(roles["suspense"]),
+                  f"{last:%d %b %Y}" if last else "none in 2 years",
+                  old.notes if old else ""]
+        todo = {i + 1: YELLOW for i in (3, 4, 5, 8) if not values[i]}
+        if values[5] and str(values[5]).lower().startswith("q") and not values[6]:
+            todo[7] = YELLOW
+        sh.line(values, fills=todo)
+    sh.note("Bank / cash / suspense ledgers were found by ACE from Tally groups and names - please check them.")
+    sh.footer("All clients", "Client Register")
+    h = Sheet(wb, "How to fill", "Client Register - how to fill it in", "Accountability Accountants - ACE",
+              [30, 100], tab=BLUE)
+    h.header(["Column", "What to put"], freeze=False)
     for row in HELP:
-        h.append(list(row))
-    h.append([])
-    h.append(["When done", f"Save this sheet as '{REGISTER}' in the ACE/tally folder (replace the old one). "
-              "ACE reads it before every Tally check."])
-    h.column_dimensions["A"].width = 30
-    h.column_dimensions["B"].width = 100
-    buf = io.BytesIO()
-    wb.save(buf)
+        h.line(list(row))
+    h.line(["When done", f"Save the sheet as '{REGISTER}' in the ACE/tally folder (replace the old one). "
+            "ACE reads it before every Tally check."], style="subtotal")
+    h.footer("All clients", "Client Register")
+    wb["Clients"].sheet_properties.tabColor = GREEN          # input sheet
     name = free_name(store, [], f"Client Register (draft) {today:%Y-%m-%d}.xlsx")
-    where = store.save([name], buf.getvalue())
+    where = store.save([name], save(wb))
     return where, len(companies)
 
 
