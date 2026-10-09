@@ -42,7 +42,7 @@ def test_reads_companies_ledgers_and_last_entry():
     assert cs[0]["books_from"] == date(2025, 1, 1)
     ls = t.ledgers("Mara Trading LLC", date(2026, 1, 1), date(2026, 9, 30))
     assert [(l.name, l.parent, l.closing) for l in ls] == [("Cash", "Cash-in-Hand", -2500.0), ("Capital", "Capital Account", 2500.0)]
-    assert "<SVCURRENTCOMPANY>Mara Trading LLC</SVCURRENTCOMPANY>" in sent[-1] and "<SVTODATE>20260930</SVTODATE>" in sent[-1]
+    assert "<SVCURRENTCOMPANY>Mara Trading LLC</SVCURRENTCOMPANY>" in sent[-1] and '<SVTODATE TYPE="Date">30-Sep-2026</SVTODATE>' in sent[-1]
     assert t.last_voucher_date("Mara Trading LLC") == date(2026, 10, 3)
     assert all("<TALLYREQUEST>Export</TALLYREQUEST>" in s for s in sent)
 
@@ -93,3 +93,42 @@ def test_probe_reports_connection_problem(capsys):
     t = Tally(url="http://tally:9000", transport=httpx.MockTransport(down))
     assert probe.main([], tally=t) == 1
     assert "Connectivity set to Server/Both" in capsys.readouterr().out
+
+
+TB = b"""<ENVELOPE><DSPACCNAME><DSPDISPNAME>Capital Account</DSPDISPNAME></DSPACCNAME>
+<DSPACCINFO><DSPCLDRAMT><DSPCLDRAMTA></DSPCLDRAMTA></DSPCLDRAMT><DSPCLCRAMT><DSPCLCRAMTA>5000.00</DSPCLCRAMTA></DSPCLCRAMT></DSPACCINFO>
+<DSPACCNAME><DSPDISPNAME>Current Assets</DSPDISPNAME></DSPACCNAME>
+<DSPACCINFO><DSPCLDRAMT><DSPCLDRAMTA>-5000.00</DSPCLDRAMTA></DSPCLDRAMT><DSPCLCRAMT><DSPCLCRAMTA></DSPCLCRAMTA></DSPCLCRAMT></DSPACCINFO>
+</ENVELOPE>"""
+
+
+def test_period_is_typed_and_also_written_as_filter():
+    sent = []
+
+    def handler(request):
+        sent.append(request.content.decode())
+        return httpx.Response(200, content=VOUCHERS if "<TYPE>Voucher</TYPE>" in sent[-1] else TB)
+    t = Tally(url="http://tally:9000", transport=httpx.MockTransport(handler))
+    t.voucher_dates("Mara", date(2024, 1, 1), date(2024, 12, 31))
+    body = sent[-1]
+    assert '<SVFROMDATE TYPE="Date">1-Jan-2024</SVFROMDATE>' in body
+    assert "<FILTERS>ACEFrom</FILTERS>" in body and 'NAME="ACEFrom">$Date &gt;= $$Date:"1-Jan-2024"' in body
+    check_read_only(body)
+    assert t.trial_balance("Mara") == [("Capital Account", 5000.0), ("Current Assets", -5000.0)]
+
+
+def test_probe_date_check(capsys):
+    def handler(request):
+        b = request.content.decode()
+        if "<TYPE>Company</TYPE>" in b:
+            return httpx.Response(200, content=COMPANIES)
+        if "<TYPE>Ledger</TYPE>" in b:
+            return httpx.Response(200, content=LEDGERS)
+        if "<TYPE>Voucher</TYPE>" in b:
+            return httpx.Response(200, content=VOUCHERS)
+        return httpx.Response(200, content=TB)
+    t = Tally(url="http://tally:9000", transport=httpx.MockTransport(handler))
+    assert probe.main(["--company", "mara", "--dates"], tally=t) == 0
+    out = capsys.readouterr().out
+    assert "Vouchers, period as filter: 2 vouchers, 30 Sep 2026 to 03 Oct 2026" in out
+    assert "Trial Balance to 31 Dec 2024: debits 5,000.00 / credits 5,000.00" in out

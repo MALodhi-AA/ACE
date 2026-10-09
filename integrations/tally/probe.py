@@ -52,6 +52,8 @@ def main(argv: list[str] | None = None, tally: Tally | None = None) -> int:
     ap.add_argument("--show", action="store_true", help="also print the 15 largest ledger balances")
     ap.add_argument("--report", help="a Tally report name, e.g. 'Trial Balance'")
     ap.add_argument("--raw", action="store_true", help="save the report's raw XML to state/tally-probe/")
+    ap.add_argument("--dates", action="store_true",
+                    help="check whether Tally applies the period ACE asks for (default 1 Jan - 31 Dec 2024)")
     args = ap.parse_args(argv)
     frm, to = _d(args.frm), _d(args.to)
 
@@ -92,6 +94,9 @@ def main(argv: list[str] | None = None, tally: Tally | None = None) -> int:
                 print(f"Saved to state/tally-probe/{f.name}")
             return 0
 
+        if args.dates:
+            return _date_check(t, name, frm or date(2024, 1, 1), to or date(2024, 12, 31))
+
         start = time.monotonic()
         ledgers = t.ledgers(name, frm, to)
         took = time.monotonic() - start
@@ -113,6 +118,36 @@ def main(argv: list[str] | None = None, tally: Tally | None = None) -> int:
     except TallyError as exc:
         print(f"FAILED: {exc}")
         return 1
+    return 0
+
+
+def _span(dates: list) -> str:
+    return f"{len(dates):,} vouchers, {dates[0]:%d %b %Y} to {dates[-1]:%d %b %Y}" if dates else "no vouchers"
+
+
+def _totals(rows) -> str:
+    dr = sum(-v for v in rows if v < 0)
+    cr = sum(v for v in rows if v > 0)
+    return f"debits {dr:,.2f} / credits {cr:,.2f}"
+
+
+def _date_check(t: Tally, name: str, frm: date, to: date) -> int:
+    """Does Tally use the period in ACE's requests, or its own selected period?"""
+    print(f"Period check, asking for {frm:%d %b %Y} to {to:%d %b %Y}:")
+    tests = [("Vouchers, no period given", lambda: _span(t.voucher_dates(name))),
+             ("Vouchers, period as variables", lambda: _span(t.voucher_dates(name, frm, to, strict=False))),
+             ("Vouchers, period as filter", lambda: _span(t.voucher_dates(name, frm, to))),
+             ("Ledger balances, no period", lambda: _totals([l.closing for l in t.ledgers(name)])),
+             (f"Ledger balances to {to:%d %b %Y}", lambda: _totals([l.closing for l in t.ledgers(name, frm, to)])),
+             ("Trial Balance, no period", lambda: _totals([v for _, v in t.trial_balance(name)])),
+             (f"Trial Balance to {to:%d %b %Y}", lambda: _totals([v for _, v in t.trial_balance(name, frm, to)]))]
+    for label, fn in tests:
+        start = time.monotonic()
+        try:
+            out = fn()
+        except TallyError as exc:
+            out = f"FAILED: {exc}"
+        print(f"  {label}: {out} ({time.monotonic() - start:.1f}s)")
     return 0
 
 

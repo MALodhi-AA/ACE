@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.5 - 2026-10-09
+Tally periods. The first probe showed Tally ignoring the dates ACE sent (same balances for any date;
+"last entry" from Tally's own selected period).
+- Dates are now sent as typed date variables (`<SVFROMDATE TYPE="Date">1-Jan-2024</SVFROMDATE>`), and
+  voucher reads also carry the period as a filter inside the request, so it holds whatever period is
+  selected in Tally.
+- Reads Tally's own Trial Balance (top level, as on screen).
+- Probe `--dates`: compares vouchers, ledger balances and the Trial Balance with and without a period
+  (default 1 Jan - 31 Dec 2024) to show which way Tally applies it.
+
 ## 0.7.4 - 2026-10-09
 First step to Tally (read-only, XML over HTTP to TallyPrime on the HP server).
 - integrations/tally/client.py: Tally client that can only read. Every request is checked before it is

@@ -94,6 +94,11 @@ def tally_date(d: date) -> str:
     return d.strftime("%Y%m%d")
 
 
+def tally_day(d: date) -> str:
+    """1-Apr-2026 - the form Tally's date variables accept."""
+    return f"{d.day}-{d:%b-%Y}"
+
+
 def parse_tally_date(s: str | None) -> date | None:
     s = (s or "").strip()
     if re.fullmatch(r"\d{8}", s):
@@ -169,12 +174,13 @@ class Tally:
         sv = {"SVEXPORTFORMAT": "$$SysName:XML"}
         if company:
             sv["SVCURRENTCOMPANY"] = company
-        if frm:
-            sv["SVFROMDATE"] = tally_date(frm)
-        if to:
-            sv["SVTODATE"] = tally_date(to)
         sv.update(extra or {})
         svx = "".join(f"<{k}>{escape(str(v))}</{k}>" for k, v in sv.items())
+        # v0.7.5: Tally applies a period only when the variables are typed as dates
+        if frm:
+            svx += f'<SVFROMDATE TYPE="Date">{tally_day(frm)}</SVFROMDATE>'
+        if to:
+            svx += f'<SVTODATE TYPE="Date">{tally_day(to)}</SVTODATE>'
         tdlx = f"<TDL><TDLMESSAGE>{tdl}</TDLMESSAGE></TDL>" if tdl else ""
         return (f"<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>"
                 f"<TYPE>{kind}</TYPE><ID>{escape(ident)}</ID></HEADER><BODY><DESC>"
@@ -182,15 +188,18 @@ class Tally:
 
     def collection(self, name: str, obj_type: str, fetch: list[str], company: str | None = None,
                    frm: date | None = None, to: date | None = None, child_of: str | None = None,
-                   filters: list[str] | None = None) -> list[ET.Element]:
-        """Objects of one type with the fields asked for (inline TDL collection, read-only)."""
+                   formulas: dict[str, str] | None = None) -> list[ET.Element]:
+        """Objects of one type with the fields asked for (inline TDL collection, read-only).
+        formulas: {name: TDL condition} used as filters, e.g. {"InPeriod": '$Date >= $$Date:"1-Jun-2026"'}."""
         parts = [f"<TYPE>{escape(obj_type)}</TYPE>"]
         if child_of:
             parts.append(f"<CHILDOF>{escape(child_of)}</CHILDOF>")
         parts.append(f"<FETCH>{escape(', '.join(fetch))}</FETCH>")
-        for f in filters or []:
+        for f in formulas or {}:
             parts.append(f"<FILTERS>{escape(f)}</FILTERS>")
         tdl = f'<COLLECTION NAME="{escape(name)}" ISMODIFY="No">{"".join(parts)}</COLLECTION>'
+        for f, cond in (formulas or {}).items():
+            tdl += f'<SYSTEM TYPE="Formulae" NAME="{escape(f)}">{escape(cond)}</SYSTEM>'
         root = self.request(self._envelope("Collection", name, company, frm, to, tdl))
         tag = obj_type.upper()
         return list(root.iter(tag))
@@ -219,13 +228,39 @@ class Tally:
                                   amount(l.findtext("OPENINGBALANCE")), amount(l.findtext("CLOSINGBALANCE"))))
         return out
 
+    def voucher_dates(self, company: str, frm: date | None = None, to: date | None = None,
+                      strict: bool = True) -> list[date]:
+        """Dates of the vouchers in the period. strict: the period is also written into the request as a
+        filter, so it holds even if Tally keeps its own selected period."""
+        formulas = {}
+        if strict and frm:
+            formulas["ACEFrom"] = f'$Date >= $$Date:"{tally_day(frm)}"'
+        if strict and to:
+            formulas["ACETo"] = f'$Date <= $$Date:"{tally_day(to)}"'
+        rows = self.collection("ACEVoucherDates", "Voucher", ["Date"], company=company, frm=frm, to=to,
+                               formulas=formulas)
+        return sorted(d for d in (parse_tally_date(v.findtext("DATE")) for v in rows) if d)
+
     def last_voucher_date(self, company: str, frm: date | None = None, to: date | None = None) -> date | None:
         """Date of the latest voucher in the period (books up to date?)."""
-        rows = self.collection("ACEVoucherDates", "Voucher", ["Date"], company=company, frm=frm, to=to)
-        dates = [d for d in (parse_tally_date(v.findtext("DATE")) for v in rows) if d]
-        return max(dates) if dates else None
+        dates = self.voucher_dates(company, frm, to)
+        return dates[-1] if dates else None
 
     def report(self, company: str, report: str, frm: date | None = None, to: date | None = None,
                extra: dict | None = None) -> ET.Element:
         """One of Tally's own reports as XML (e.g. 'Trial Balance', 'Balance Sheet', 'Profit and Loss')."""
         return self.request(self._envelope("Data", report, company, frm, to, extra=extra))
+
+    def trial_balance(self, company: str, frm: date | None = None, to: date | None = None) -> list[tuple[str, float]]:
+        """Tally's own Trial Balance (top level, as on screen): [(name, closing)] with debit negative."""
+        root = self.report(company, "Trial Balance", frm, to)
+        rows, name = [], None
+        for el in root:
+            if el.tag == "DSPACCNAME":
+                name = (el.findtext("DSPDISPNAME") or "").strip()
+            elif el.tag == "DSPACCINFO" and name is not None:
+                dr = amount(el.findtext("DSPCLDRAMT/DSPCLDRAMTA"))
+                cr = amount(el.findtext("DSPCLCRAMT/DSPCLCRAMTA"))
+                rows.append((name, -abs(dr) + abs(cr)))
+                name = None
+        return rows
