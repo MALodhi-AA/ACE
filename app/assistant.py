@@ -73,7 +73,7 @@ def follow_text(t: dict) -> str:
 
 class Assistant:
     def __init__(self, chat, store: TaskStore | None = None, ask_model=None, bot=None, text_model=None,
-                 fast_brain=None, full_brain=None) -> None:
+                 fast_brain=None, full_brain=None, tally=None) -> None:
         """`chat`: the channel watcher (post, find_channel, username, directory, channels).
         `bot`: read-only view of the attendance + task bot (None if not configured)."""
         self.chat = chat
@@ -88,6 +88,13 @@ class Assistant:
         self._fast_brain, self._full_brain = fast_brain, full_brain
         self.brain = None
         self._last_tick: datetime | None = None
+        if tally is None:
+            from integrations.tally.client import Tally, configured
+            tally = Tally() if configured() else None
+        self.tally = tally                                  # read-only TallyPrime (None if not set up)
+        from app.tally_tasks import TallyTasks
+        self.tally_tasks = TallyTasks(self.store)
+        self.tally_store = None                             # where Tally files go (None = ACE/tally on the NAS)
 
     # ---------------------------------------------------------------- helpers
     @staticmethod
@@ -179,8 +186,31 @@ class Assistant:
         cid = int(ch["channel_id"])
         uid = str(post.get("creator_id"))
         say = lambda msg: self.chat.post(cid, msg, thread)  # noqa: E731
+        self._last_cid, self._last_thread = cid, thread
         t = text.strip()
         low = t.lower()
+
+        # Tally: pending task draft and commands (v0.8.0)
+        tdraft = self.store.get_meta(f"tallydraft:{uid}")
+        if tdraft:
+            if YES.match(t):
+                self.store.set_meta(f"tallydraft:{uid}", None)
+                if tdraft.get("problems"):
+                    say("That task still has open points - tell me the correction first, or NO to drop it.")
+                    self.store.set_meta(f"tallydraft:{uid}", tdraft)
+                    return True
+                task = self.tally_tasks.add(tdraft["task"], uid)
+                audit("tally_task_created", task=task["id"], name=task["name"])
+                say(f"Saved as Tally task {task['id']}.\n" + self._tally_task_line(task))
+                return True
+            if NO.match(t):
+                self.store.set_meta(f"tallydraft:{uid}", None)
+                say("Dropped - no Tally task saved.")
+                return True
+        if self._tally_command(t, uid, say):
+            return True
+        if tdraft and not INSTRUCTION.match(t):
+            return self._tally_draft_bg(ch, post, t, uid, thread, previous=tdraft)
 
         # pending confirmation?
         draft = self.store.get_meta(f"draft:{uid}")
@@ -549,6 +579,12 @@ Today is {now():%A %d %B %Y}. Their open tasks:
                 self._tick_task(t, t0)
             except Exception as exc:  # noqa: BLE001
                 log.warning("task %s: %s", ref(t["id"]), exc)
+        if self.tally:
+            for task in self.tally_tasks.due(t0):
+                from app.tally_tasks import next_run
+                nr = next_run(task["schedule"], t0)
+                self.tally_tasks.update(task["id"], next_run=nr.isoformat(timespec="seconds") if nr else None)
+                self._tally_run_bg(task, None, lambda msg: self.to_manager(msg))
         start = datetime.combine(t0.date(), settings.digest_time, tz())
         if t0.weekday() in self.hours.days and start <= t0 < start + timedelta(hours=3) \
                 and self.store.get_meta("digest_day") != t0.date().isoformat():
@@ -796,6 +832,147 @@ Today is {now():%A %d %B %Y}. Their open tasks:
     def _title(self, tid: int) -> str:
         t = self.store.get(tid)
         return t["title"] if t else ""
+
+    # ---------------------------------------------------------------- Tally (v0.8.0)
+    def _bg(self, fn) -> None:
+        runner = getattr(self.chat, "run_later", None)
+        (runner or (lambda f: f()))(fn)
+
+    def _tally_task_line(self, task: dict) -> str:
+        from app.tally_tasks import task_text
+        return task_text(task)
+
+    def tally_ask(self, company: str, question: str) -> str:
+        """For the 'ask' check: the full AI answers from Tally data about one company."""
+        from app.brain import Brain
+        if self.brain is None:
+            self.brain = Brain(self, fast=self._fast_brain, full=self._full_brain)
+        return self.brain._full_route("tally", f"About the Tally company '{company}': {question}", {})
+
+    def _tally_run_bg(self, task: dict, only: str | None, reply) -> None:
+        from app.tally_tasks import run_task
+
+        def work():
+            try:
+                msg = run_task(task, self.tally, self.tally_tasks, only=only, ask=self.tally_ask,
+                               store=self.tally_store, register=getattr(self, "tally_register", None))
+            except Exception as exc:  # noqa: BLE001
+                log.exception("tally task %s failed", task["id"])
+                msg = f"Tally check {task['id']} '{task['name']}' failed: {type(exc).__name__}: {exc}"
+            audit("tally_run", task=task["id"], only=only or "")
+            reply(msg)
+        self._bg(work)
+
+    def _tally_draft_bg(self, ch, post, text: str, uid: str, thread, previous: dict | None = None) -> bool:
+        from app.tally_tasks import confirm_text, draft_prompt, validate
+        cid = int(ch["channel_id"])
+
+        def work():
+            user = text if not previous else (f"Earlier draft: {json.dumps(previous['task'])}\n"
+                                              f"Correction from Sir Muhammad Ali: {text}")
+            try:
+                d = self._model(draft_prompt(now().date()), user)
+            except Exception as exc:  # noqa: BLE001
+                self.chat.post(cid, f"I couldn't prepare the Tally task ({type(exc).__name__}).", thread)
+                return
+            problems = validate(d)
+            self.store.set_meta(f"draft:{uid}", None)
+            self.store.set_meta(f"tallydraft:{uid}", {"task": d, "problems": problems})
+            self.chat.post(cid, confirm_text(d, problems), thread)
+        self._bg(work)
+        return True
+
+    def _tally_command(self, t: str, uid: str, say) -> bool:
+        """Built-in Tally commands (no AI). True if handled."""
+        from app import tally_tasks as tt
+        low = t.strip().lower()
+        if not re.match(r"^\s*(tally|draft\s+(the\s+)?client\s+register|client\s+register)\b", low):
+            return False
+        if not self.tally:
+            say("Tally is not connected (set TALLY_URL in .env).")
+            return True
+        if re.match(r"^\s*(draft\s+(the\s+)?)?client\s+register\b", low):
+            from app.tally_register import draft
+
+            def work():
+                try:
+                    where, n = draft(self.tally, store=self.tally_store)
+                    msg = (f"Client register drafted from Tally ({n} companies): {where}\n"
+                           "Fill in short name, staff, manager, VAT period, TRN, check the ledgers, then save it as "
+                           "'Client Register.xlsx' in the same folder. I read it before every Tally check.")
+                except Exception as exc:  # noqa: BLE001
+                    msg = f"I couldn't draft the client register: {exc}"
+                say(msg)
+            say("Drafting the client register from Tally - this takes a few minutes for all companies.")
+            self._bg(work)
+            return True
+        if re.match(r"^\s*tally\s+(tasks|checks)\s*$", low):
+            say(tt.list_text(self.tally_tasks))
+            return True
+        if re.match(r"^\s*tally\s+(check\s+)?types\s*$", low):
+            from app.tally_checks import types_text
+            say(types_text())
+            return True
+        if re.match(r"^\s*tally\s+companies\s*$", low):
+            from app.tally_register import load
+            try:
+                cs = self.tally.companies()
+            except Exception as exc:  # noqa: BLE001
+                say(f"I can't reach Tally: {exc}")
+                return True
+            reg = load(self.tally_store)
+            rows = [f"- {c['name']}" + (f" ({reg[c['name']].short})" if reg.get(c['name']) and reg[c['name']].short
+                                         and reg[c['name']].short != c['name'] else "")
+                    + ("" if not reg.get(c['name']) or reg[c['name']].include else " - left out")
+                    for c in sorted(cs, key=lambda c: c["name"].lower())]
+            say(f"{len(cs)} companies open in Tally" + (" (no client register yet)" if not reg else "") + ":\n"
+                + "\n".join(rows))
+            return True
+        m = re.match(r"^\s*tally\s+(run|pause|resume|delete|remove|task|show)\s+(\d+)(?:\s+(?:for|on)\s+(.+?))?\s*$", t,
+                     re.IGNORECASE)
+        if m:
+            verb, tid, only = m.group(1).lower(), int(m.group(2)), m.group(3)
+            task = self.tally_tasks.get(tid)
+            if not task:
+                say(f"There is no Tally task {tid}. 'tally tasks' lists them.")
+                return True
+            if verb == "run":
+                say(f"Running Tally check {tid} '{task['name']}'" + (f" for {only}" if only else "") + " - I'll report back.")
+                self._tally_run_bg(task, only, say)
+            elif verb == "pause":
+                self.tally_tasks.update(tid, enabled=0)
+                say(f"Tally task {tid} paused.")
+            elif verb == "resume":
+                nr = tt.next_run(task["schedule"], now())
+                self.tally_tasks.update(tid, enabled=1, next_run=nr.isoformat(timespec="seconds") if nr else None)
+                say(f"Tally task {tid} resumed.")
+            elif verb in ("delete", "remove"):
+                self.tally_tasks.delete(tid)
+                audit("tally_task_deleted", task=tid)
+                say(f"Tally task {tid} deleted (its past results are kept).")
+            else:
+                runs = self.tally_tasks.runs(tid, 60)
+                last = [r for r in runs if r["ts"] == runs[0]["ts"]] if runs else []
+                bad = [r for r in runs[:60] if r["status"] in ("fail", "error")][:10]
+                out = [self._tally_task_line(task)]
+                if bad:
+                    out.append("Recent findings:")
+                    out += [f"- {r['ts'][:16].replace('T', ' ')} {r['company']}: {r['summary']}" for r in bad]
+                elif last:
+                    out.append("No findings in the recent runs.")
+                say("\n".join(out))
+            return True
+        m = re.match(r"^\s*tally\s+(?:task|check)\s*[:\-]?\s*(.+)$", t, re.IGNORECASE | re.DOTALL)
+        if m and m.group(1).strip():
+            say("Preparing the Tally task...")
+            ch = {"channel_id": self._last_cid}
+            return self._tally_draft_bg(ch, {}, m.group(1).strip(), uid, self._last_thread)
+        if re.match(r"^\s*tally\s*(help|\?)?\s*$", low):
+            say("Tally commands: tally tasks | tally task: <what to check, which companies, when> | tally run <n> "
+                "[for <company>] | tally show <n> | tally pause/resume/delete <n> | tally companies | "
+                "tally check types | draft client register. Or just ask, e.g. 'what is the cash balance of Al Wasl?'")
+            return True
+        return False                                      # a question about Tally - the brain answers it
 
     def status_line(self) -> str:
         tasks = self.store.open_tasks()

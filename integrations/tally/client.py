@@ -229,7 +229,7 @@ class Tally:
         return out
 
     def voucher_dates(self, company: str, frm: date | None = None, to: date | None = None,
-                      strict: bool = True) -> list[date]:
+                      strict: bool = True, extra: dict[str, str] | None = None) -> list[date]:
         """Dates of the vouchers in the period. strict: the period is also written into the request as a
         filter, so it holds even if Tally keeps its own selected period."""
         formulas = {}
@@ -237,6 +237,7 @@ class Tally:
             formulas["ACEFrom"] = f'$Date >= $$Date:"{tally_day(frm)}"'
         if strict and to:
             formulas["ACETo"] = f'$Date <= $$Date:"{tally_day(to)}"'
+        formulas.update(extra or {})
         rows = self.collection("ACEVoucherDates", "Voucher", ["Date"], company=company, frm=frm, to=to,
                                formulas=formulas)
         return sorted(d for d in (parse_tally_date(v.findtext("DATE")) for v in rows) if d)
@@ -264,3 +265,54 @@ class Tally:
                 rows.append((name, -abs(dr) + abs(cr)))
                 name = None
         return rows
+
+    # --- v0.8.0: groups and vouchers with their ledger lines ------------------------------
+    def groups(self, company: str) -> dict[str, str]:
+        """{group name: parent group} ('' for the primary groups)."""
+        rows = self.collection("ACEGroups", "Group", ["Name", "Parent"], company=company)
+        out = {}
+        for g in rows:
+            name = (g.get("NAME") or g.findtext("NAME") or "").strip()
+            if name:
+                out[name] = (g.findtext("PARENT") or "").strip()
+        return out
+
+    def vouchers(self, company: str, frm: date, to: date) -> list[dict]:
+        """Vouchers in the period with their ledger lines:
+        [{date, number, type, narration, lines: [(ledger, amount)]}] - amount debit negative."""
+        formulas = {"ACEFrom": f'$Date >= $$Date:"{tally_day(frm)}"', "ACETo": f'$Date <= $$Date:"{tally_day(to)}"'}
+        rows = self.collection("ACEVouchers", "Voucher",
+                               ["Date", "VoucherNumber", "VoucherTypeName", "Narration", "PartyLedgerName",
+                                "AllLedgerEntries.LedgerName", "AllLedgerEntries.Amount",
+                                "LedgerEntries.LedgerName", "LedgerEntries.Amount"],
+                               company=company, frm=frm, to=to, formulas=formulas)
+        out = []
+        for v in rows:
+            lines = []
+            for tag in ("ALLLEDGERENTRIES.LIST", "LEDGERENTRIES.LIST"):
+                for e in v.iter(tag):
+                    name = (e.findtext("LEDGERNAME") or "").strip()
+                    if name:
+                        lines.append((name, amount(e.findtext("AMOUNT"))))
+                if lines:
+                    break
+            out.append({"date": parse_tally_date(v.findtext("DATE")),
+                        "number": (v.findtext("VOUCHERNUMBER") or "").strip(),
+                        "type": (v.findtext("VOUCHERTYPENAME") or "").strip(),
+                        "narration": (v.findtext("NARRATION") or "").strip(),
+                        "party": (v.findtext("PARTYLEDGERNAME") or "").strip(),
+                        "lines": lines})
+        return out
+
+
+def in_group(group: str, target: str, groups: dict[str, str]) -> bool:
+    """Is `group` the target group or below it?"""
+    target = target.strip().lower()
+    seen = set()
+    g = group
+    while g and g.lower() not in seen:
+        if g.lower() == target:
+            return True
+        seen.add(g.lower())
+        g = next((p for n, p in groups.items() if n.lower() == g.lower()), "")
+    return False

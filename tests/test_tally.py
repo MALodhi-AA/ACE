@@ -132,3 +132,23 @@ def test_probe_date_check(capsys):
     out = capsys.readouterr().out
     assert "Vouchers, period as filter: 2 vouchers, 30 Sep 2026 to 03 Oct 2026" in out
     assert "Trial Balance to 31 Dec 2024: debits 5,000.00 / credits 5,000.00" in out
+
+
+def test_voucher_and_type_requests_pass_the_read_only_guard():
+    sent = []
+    t = fake_tally(sent)
+    t.voucher_dates("Mara", date(2026, 1, 1), date(2026, 1, 31), extra={"ACEType": "$$IsSales:$VoucherTypeName"})
+    t.vouchers("Mara", date(2026, 1, 1), date(2026, 1, 31))
+    t.groups("Mara")
+    assert len(sent) == 3 and "AllLedgerEntries.LedgerName" in sent[1]
+
+
+def test_voucher_lines_are_parsed():
+    xml = b"""<ENVELOPE><VOUCHER><DATE>20261006</DATE><VOUCHERNUMBER>J-12</VOUCHERNUMBER>
+    <VOUCHERTYPENAME>Journal</VOUCHERTYPENAME><NARRATION>x</NARRATION>
+    <ALLLEDGERENTRIES.LIST><LEDGERNAME>Suspense A/c</LEDGERNAME><AMOUNT>-1500.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+    <ALLLEDGERENTRIES.LIST><LEDGERNAME>Bank</LEDGERNAME><AMOUNT>1500.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+    </VOUCHER></ENVELOPE>"""
+    t = Tally(url="http://tally:9000", transport=httpx.MockTransport(lambda r: httpx.Response(200, content=xml)))
+    v = t.vouchers("Mara", date(2026, 10, 1), date(2026, 10, 7))[0]
+    assert v["date"] == date(2026, 10, 6) and v["number"] == "J-12" and v["lines"] == [("Suspense A/c", -1500.0), ("Bank", 1500.0)]

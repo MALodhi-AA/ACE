@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.8.0 - 2026-10-09
+Tally tasks - a flexible way for Sir Muhammad Ali to tell ACE what to check in Tally (read-only).
+- Client register: "draft client register" builds ACE/tally/Client Register (draft) <date>.xlsx from
+  Tally (company, FY start, bank / cash / suspense ledgers found from groups and names, last entry).
+  Fill in short name, staff, manager, VAT period, TRN and save it as ACE/tally/Client Register.xlsx;
+  ACE reads it before every run. Drafts never overwrite.
+- Check types (app/tally_checks.py): future_entries, last_entry (optionally by voucher type),
+  ledger_balance (zero / no_credit / no_debit / max / min), ledger_postings (period, min amount),
+  compare (vs previous period or last year, threshold %), report (Trial Balance or ledger balances to
+  Excel in ACE/tally/reports/<client>/), ask (question answered by the AI from Tally data).
+  Targets: ledger name, the roles suspense / bank / cash, or a group (sub-groups included).
+- Tally tasks: "tally task: <what, which companies, when>" -> ACE drafts it, shows it, saves on YES.
+  Companies: all (register Include = Y), names / short names, by staff, manager or VAT period.
+  Schedules: manual, daily, weekdays, weekly <day>, monthly <day> at HH:MM. Results go to Sir
+  Muhammad Ali only, problems only unless "report everything". Every run is kept (tally_runs).
+- Commands: tally tasks | tally run <n> [for <company>] | tally show <n> | tally pause/resume/delete <n> |
+  tally companies | tally check types | draft client register.
+- Questions in plain words about Tally go to the brain's new tools: tally_companies, tally_balances,
+  tally_trial_balance, tally_postings, tally_tasks, prepare_tally_task.
+- Tally probe: --vouchers (counts of vouchers and ledger lines for the last 7 days).
+- One Tally job runs at a time; heavy checks are best scheduled early morning or evening.
+
 ## 0.7.5 - 2026-10-09
 Tally periods. The first probe showed Tally ignoring the dates ACE sent (same balances for any date;
 "last entry" from Tally's own selected period).

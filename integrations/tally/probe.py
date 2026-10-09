@@ -52,6 +52,8 @@ def main(argv: list[str] | None = None, tally: Tally | None = None) -> int:
     ap.add_argument("--show", action="store_true", help="also print the 15 largest ledger balances")
     ap.add_argument("--report", help="a Tally report name, e.g. 'Trial Balance'")
     ap.add_argument("--raw", action="store_true", help="save the report's raw XML to state/tally-probe/")
+    ap.add_argument("--vouchers", action="store_true",
+                    help="read the last 7 days of vouchers with their ledger lines (counts only)")
     ap.add_argument("--dates", action="store_true",
                     help="check whether Tally applies the period ACE asks for (default 1 Jan - 31 Dec 2024)")
     args = ap.parse_args(argv)
@@ -94,6 +96,21 @@ def main(argv: list[str] | None = None, tally: Tally | None = None) -> int:
                 print(f"Saved to state/tally-probe/{f.name}")
             return 0
 
+        if args.vouchers:
+            end = to or date.today()
+            start = time.monotonic()
+            vs = t.vouchers(name, frm or end - timedelta(days=6), end)
+            took = time.monotonic() - start
+            lines = sum(len(v["lines"]) for v in vs)
+            types = {}
+            for v in vs:
+                types[v["type"]] = types.get(v["type"], 0) + 1
+            unbalanced = sum(1 for v in vs if v["lines"] and abs(sum(a for _, a in v["lines"])) > 0.01)
+            print(f"Vouchers {(frm or end - timedelta(days=6)):%d %b} - {end:%d %b %Y}: {len(vs)} with {lines} ledger "
+                  f"lines (read in {took:.1f}s); without lines: {sum(1 for v in vs if not v['lines'])}; "
+                  f"lines not adding to zero: {unbalanced}")
+            print("  by type: " + ", ".join(f"{k or '?'} {n}" for k, n in sorted(types.items())))
+            return 0
         if args.dates:
             return _date_check(t, name, frm or date(2024, 1, 1), to or date(2024, 12, 31))
 

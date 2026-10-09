@@ -64,7 +64,30 @@ TOOLS = [
      "(e.g. who handles which client, how he wants things done).",
      "input_schema": {"type": "object", "properties": {"fact": {"type": "string"}}, "required": ["fact"]}},
 ]
-READ_TOOLS = {"attendance_today", "person_status", "team_tasks", "followups", "followup_detail", "bot_health",
+TOOLS += [
+    {"name": "tally_companies", "description": "Companies open in Tally (accounting) with their short names.",
+     "input_schema": {"type": "object", "properties": {}}},
+    {"name": "tally_balances", "description": "Tally ledger balances of one company: a ledger (name, or suspense / bank "
+     "/ cash) or a group (e.g. Sundry Debtors), as at a date (default today).",
+     "input_schema": {"type": "object", "properties": {"company": {"type": "string"}, "ledger": {"type": "string"},
+                      "group": {"type": "string"}, "as_of": {"type": "string", "description": "YYYY-MM-DD"}},
+                      "required": ["company"]}},
+    {"name": "tally_trial_balance", "description": "Tally's Trial Balance (top level) of one company as at a date.",
+     "input_schema": {"type": "object", "properties": {"company": {"type": "string"},
+                      "as_of": {"type": "string", "description": "YYYY-MM-DD"}}, "required": ["company"]}},
+    {"name": "tally_postings", "description": "Entries posted to a Tally ledger or group of one company in a period "
+     "(today, last_7_days, this_month, last_month, this_quarter, YYYY-MM-DD..YYYY-MM-DD).",
+     "input_schema": {"type": "object", "properties": {"company": {"type": "string"}, "ledger": {"type": "string"},
+                      "group": {"type": "string"}, "period": {"type": "string"},
+                      "min_amount": {"type": "number"}}, "required": ["company"]}},
+    {"name": "tally_tasks", "description": "The Tally check tasks Sir Muhammad Ali has set up, with their last results.",
+     "input_schema": {"type": "object", "properties": {}}},
+    {"name": "prepare_tally_task", "description": "Set up a Tally check task (what to check, which companies, when). "
+     "ACE shows Sir Muhammad Ali a draft and waits for his YES. Pass his instruction in full.",
+     "input_schema": {"type": "object", "properties": {"instruction": {"type": "string"}}, "required": ["instruction"]}},
+]
+READ_TOOLS = {"tally_companies", "tally_balances", "tally_trial_balance", "tally_postings", "tally_tasks",
+              "attendance_today", "person_status", "team_tasks", "followups", "followup_detail", "bot_health",
               "client_files"}
 
 
@@ -162,7 +185,8 @@ class Brain:
         today = now()
         return (persona() + f"\nToday is {today:%A %d %B %Y %H:%M} ({settings.timezone}). You are answering "
                 f"{MANAGER} privately (never shared with staff). Data comes from the firm's attendance + task bot "
-                "(read-only) and ACE's own records."
+                "(read-only), Tally accounting data for the firm's clients (read-only, tally_* tools; figures are for "
+                f"{MANAGER} only) and ACE's own records."
                 + ("\nThings Sir Muhammad Ali told you to remember:\n- " + "\n- ".join(f) if f else ""))
 
     # ------------------------------------------------------------------ tools
@@ -197,6 +221,8 @@ class Brain:
                           ctx.get("is_direct", True), ctx.get("thread"))
             ctx["drafted"] = bool(ok)
             return "Draft shown to Sir Muhammad Ali; waiting for his OK." if ok else "Could not prepare it."
+        if name.startswith("tally_") or name == "prepare_tally_task":
+            return self.tally_tool(name, args, ctx)
         if name == "remember_fact":
             fact = (args.get("fact") or "").strip()
             if fact:
@@ -204,6 +230,67 @@ class Brain:
                 audit("memory_fact", fact=fact)
             return f"Remembered: {fact}"
         return f"Unknown tool {name}"
+
+    def tally_tool(self, name: str, args: dict, ctx: dict) -> str:
+        a = self.a
+        if not getattr(a, "tally", None):
+            return "Tally is not connected."
+        from datetime import date as _date
+
+        from app.tally_checks import CheckError, Ctx, period
+        from app.tally_register import load, match_company
+        from app.tally_tasks import list_text
+        from integrations.tally.client import dr_cr
+        if name == "tally_tasks":
+            return list_text(a.tally_tasks)
+        if name == "prepare_tally_task":
+            ch = ctx.get("ch") or {"channel_id": getattr(a, "_last_cid", None)}
+            a._tally_draft_bg(ch, ctx.get("post") or {}, args.get("instruction", ""), self._uid(ctx),
+                              ctx.get("thread"))
+            ctx["drafted"] = True
+            return "Draft of the Tally task is being shown to Sir Muhammad Ali."
+        reg = load(getattr(a, "tally_store", None))
+        c = Ctx(a.tally, reg)
+        names = [x["name"] for x in c.companies()]
+        if name == "tally_companies":
+            return "\n".join(f"{n}" + (f" ({reg[n].short})" if reg.get(n) and reg[n].short else "") for n in names)
+        found = match_company(args.get("company", ""), names, reg)
+        if not found:
+            return f"No open Tally company matches '{args.get('company')}'. Open companies: {', '.join(names)}"
+        if len(found) > 1:
+            return f"'{args.get('company')}' matches several companies: {', '.join(found)} - which one?"
+        company = found[0]
+        try:
+            if name == "tally_trial_balance":
+                as_of = _date.fromisoformat(args["as_of"]) if args.get("as_of") else c.today
+                rows = a.tally.trial_balance(company, c.fy_start(company, as_of), as_of)
+                return f"{company} - Trial Balance as at {as_of:%d %b %Y}:\n" + \
+                    "\n".join(f"{n}: {dr_cr(v)}" for n, v in rows)
+            if name == "tally_balances":
+                as_of = _date.fromisoformat(args["as_of"]) if args.get("as_of") else c.today
+                if not args.get("ledger") and not args.get("group"):
+                    return "Which ledger or group?"
+                desc, ledgers = c.target(company, args, c.fy_start(company, as_of), as_of)
+                rows = sorted(ledgers, key=lambda l: -abs(l.closing))[:40]
+                total = sum(l.closing for l in ledgers)
+                return (f"{company} - {desc} as at {as_of:%d %b %Y} (total {dr_cr(total)}):\n"
+                        + "\n".join(f"{l.name} ({l.parent}): {dr_cr(l.closing)}" for l in rows)
+                        + (f"\n... and {len(ledgers) - 40} more" if len(ledgers) > 40 else ""))
+            if name == "tally_postings":
+                from app.tally_checks import ledger_postings
+                r = ledger_postings(c, company, {"ledger": args.get("ledger"), "group": args.get("group"),
+                                                 "period": args.get("period") or "last_7_days",
+                                                 "min_amount": args.get("min_amount") or 0})
+                return f"{company}: {r.summary}" + ("\n" + "\n".join(r.details) if r.details else "")
+        except CheckError as exc:
+            return f"{company}: {exc}"
+        except Exception as exc:  # noqa: BLE001
+            return f"Tally could not answer: {exc}"
+        return f"Unknown Tally tool {name}"
+
+    @staticmethod
+    def _uid(ctx: dict) -> str:
+        return str((ctx.get("post") or {}).get("creator_id") or (settings.ace_admins[0] if settings.ace_admins else ""))
 
     # ------------------------------------------------------------------ memory commands
     def memory_command(self, t: str) -> str | None:
