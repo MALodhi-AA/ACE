@@ -156,6 +156,27 @@ Tell staff that ACE saves files shared in the channels it is in.
 
 Tasks are stored in `state/ace.db` (back it up with the rest of `D:\ACE\app\state`).
 
+## 9. Tally (read-only, v0.7.4)
+
+TallyPrime Gold runs on this HP server with all companies open. ACE reads it over Tally's
+XML port; ACE's code only sends read (Export) requests.
+
+1. In TallyPrime: F1 (Help) > Settings > Connectivity > "TallyPrime is acting as": Both,
+   Enable ODBC: Yes, Port: 9000. Keep TallyPrime open with the companies loaded.
+2. `.env`: `TALLY_URL=http://host.docker.internal:9000` (the default), then
+   `docker compose up -d --build`.
+3. Probe: `docker exec ace python -m integrations.tally.probe` (companies) and
+   `docker exec ace python -m integrations.tally.probe --company "<name>"`.
+4. Only after the probe works - keep port 9000 off the network (ACE reaches it from this
+   server itself), in an admin PowerShell:
+
+       New-NetFirewallRule -DisplayName "Tally XML - no network access" -Direction Inbound `
+         -Protocol TCP -LocalPort 9000 -RemoteAddress LocalSubnet,Internet -Action Block
+
+   Run the probe again. If it now fails, undo with
+   `Remove-NetFirewallRule -DisplayName "Tally XML - no network access"`.
+   Don't add the rule if staff PCs link Excel/Power BI to this Tally over the network.
+
 ## Keeping it running after a reboot
 
 Docker Desktop is a desktop app: containers only start once Docker Desktop is running,

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.4 - 2026-10-09
+First step to Tally (read-only, XML over HTTP to TallyPrime on the HP server).
+- integrations/tally/client.py: Tally client that can only read. Every request is checked before it is
+  sent: only "Export" requests, inline TDL may only define collections; imports, functions and actions
+  are refused in code. Reads companies, ledgers (group, opening, closing), last voucher date and any
+  Tally report (raw XML).
+- Probe: `docker exec ace python -m integrations.tally.probe` lists the open companies;
+  `--company "<name>"` shows ledger/group counts, debit/credit totals and the last entry date
+  (no ledger names unless --show); `--report "Trial Balance" --raw` saves Tally's XML for checking.
+- docker-compose: host.docker.internal points to the HP server so the container can reach Tally.
+- .env: TALLY_URL (default http://host.docker.internal:9000), TALLY_TIMEOUT.
+
 ## 0.7.3 - 2026-10-08
 - Overdue no longer counts tasks marked "submitted": that work is with the reviewer, not late with
   the staff member. Submitted tasks are still listed under "Submitted, waiting for review".
