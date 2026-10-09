@@ -78,7 +78,7 @@ def test_checks_find_problems(ft, tmp_path):
     ctx = Ctx(ft, today=TODAY, store=LocalStore(tmp_path))
     ft.future = [{"date": date(2030, 9, 15), "number": "45", "type": "Sales", "narration": "", "party": "", "lines": []}]
     r = run_check(ctx, "future_entries", CO, {})
-    assert r.status == "fail" and "1 entry dated in the future (latest 15 Sep 2030)" in r.summary
+    assert r.status == "fail" and r.summary == "1 likely error (dated up to 15 Sep 2030): Sales 1"
     assert run_check(ctx, "future_entries", CO2, {}).status == "ok"
 
     assert run_check(ctx, "last_entry", CO, {"max_days": 7}).status == "ok"
@@ -273,23 +273,50 @@ def TaskStoreForTest(tmp_path):
     return TaskStore(tmp_path / "t.db")
 
 
-def test_future_entries_show_narration_and_full_list_goes_to_excel(ft, tmp_path):
+def test_future_entries_errors_vs_planned_entries_and_excel_list(ft, tmp_path):
     from app.tasks import TaskStore
     tasks = tt.TallyTasks(TaskStore(tmp_path / "t.db"))
     task = tasks.add({"name": "Future", "check": "future_entries", "params": {}, "schedule": "manual"})
     jv = [{"date": date(2026, 10 + i % 3, 28), "number": str(500 + i), "type": "Journal", "party": "",
-           "narration": "Being rent   amortisation for the month", "lines": [("Rent", -1000.0), ("Prepaid rent", 1000.0)]}
-          for i in range(12)]
-    inv = {"date": date(2026, 11, 30), "number": "CI-2025-01969", "type": "Pur-Credit-Jun", "party": "Al Islami Foods",
-           "narration": "Inv dated 30.11.2025", "lines": [("Al Islami Foods", 1050.0), ("Purchases", -1000.0),
+           "narration": "Being rent   amortisation for the month" if i % 2 else "",
+           "lines": [("Rent", -1000.0), ("Prepaid rent", 1000.0)]} for i in range(12)]
+    pdc = [{"date": date(2027, 1, 15), "number": "1", "type": "Chq-Corres.", "party": "City Center", "narration": "",
+            "lines": [("City Center", -450044.0), ("Bank", 450044.0)]}]
+    inv = {"date": date(2026, 11, 30), "number": "CI-2025-01969", "type": "Pur-Credit-Jun", "party": "SANCO",
+           "narration": "Inv dated 30.11.2025", "lines": [("SANCO", 1050.0), ("Purchases", -1000.0),
                                                            ("Input VAT", -50.0)]}
-    ft.future = jv + [inv]
+    ft.future = jv + pdc + [inv]
     out = tt.run_task(task, ft, tasks, register={}, today=TODAY, store=LocalStore(tmp_path / "t"))
-    assert "13 entries dated in the future (latest 28 Dec 2026): Journal 12, Pur-Credit-Jun 1" in out
-    first = out.split("\n")[2]                          # likely errors first, with party, amount and narration
-    assert first == "    30 Nov 2026 Pur-Credit-Jun CI-2025-01969 - Al Islami Foods - 1,050.00 - Inv dated 30.11.2025"
-    assert "Being rent amortisation for the month" in out and "    ... and 5 more (all in the Excel list)" in out
-    path = out.split("Full list with narrations: ")[1].strip()
+    lines = out.split("\n")
+    assert "- Mara Lounge Al Wasl (E-1): 1 likely error (dated up to 30 Nov 2026): Pur-Credit-Jun 1" in lines
+    assert "    30 Nov 2026 Pur-Credit-Jun CI-2025-01969 - SANCO - 1,050.00 - Inv dated 30.11.2025" in lines
+    assert "    Post-dated cheques: 1 (15 Jan 2027) - not counted" in lines
+    assert "    Journals in advance: 12 (28 Oct 2026 - 28 Dec 2026), 6 without narration - not counted" in lines
+    assert "Journal 500" not in out                                   # planned entries are not listed one by one
+    path = out.split("Full list with narrations (every entry, grouped): ")[1].strip()
     ws = load_workbook(path).active
-    assert ws["A5"].value == "Company" and ws["G5"].value == "Narration"
-    assert ws["A7"].value == CO and ws["D7"].value == "CI-2025-01969" and ws.max_row == 6 + 13
+    head = [c.value for c in ws[5]]
+    assert head == ["Company", "Date", "Type", "Number", "Party", "Amount", "Group", "Narration"]
+    assert ws["G7"].value == "Likely error" and ws.max_row == 6 + 14
+
+    task2 = tasks.add({"name": "All", "check": "future_entries", "params": {"include_journals": "yes"},
+                       "schedule": "manual"})
+    out = tt.run_task(task2, ft, tasks, register={}, today=TODAY, store=LocalStore(tmp_path / "t"))
+    assert "13 entries dated in the future (dated up to 28 Dec 2026): Journal 12, Pur-Credit-Jun 1" in out
+
+    ft.future = jv
+    r = run_check(Ctx(ft, today=TODAY), "future_entries", CO, {})
+    assert r.status == "ok" and r.summary.startswith("no likely errors; Journals in advance: 12")
+
+
+def test_journals_without_narration(ft):
+    ft.postings = [{"date": date(2026, 9, 30), "number": "J-1", "type": "Journal", "party": "", "narration": "",
+                    "lines": [("Rent", -10.0), ("Bank", 10.0)]},
+                   {"date": date(2026, 9, 30), "number": "J-2", "type": "Journal", "party": "", "narration": "accrual",
+                    "lines": [("Rent", -10.0), ("Bank", 10.0)]},
+                   {"date": date(2026, 9, 12), "number": "P-9", "type": "Payment", "party": "", "narration": "",
+                    "lines": [("Rent", -10.0), ("Bank", 10.0)]}]
+    r = run_check(Ctx(ft, today=TODAY), "journals_without_narration", CO, {"period": "last_month"})
+    assert r.status == "fail" and r.summary == "1 journal without narration 01 Sep - 30 Sep 2026"
+    r = run_check(Ctx(ft, today=TODAY), "journals_without_narration", CO, {"voucher_type": "any"})
+    assert r.summary.startswith("2 vouchers without narration")

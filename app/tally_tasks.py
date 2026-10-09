@@ -229,14 +229,17 @@ def run_task(task: dict, tally, tasks: TallyTasks, register: dict | None = None,
                                         f"{len(infos)} done" if infos else "",
                                         f"{len(errors)} could not be checked" if errors else ""] if x))
         lines = [head]
-        listing = _findings_file(task, [(ctx.label(c), r) for c, r in fails if r.rows], store, ctx.today)
+        listing = _findings_file(task, [(ctx.label(c), r) for c, r in fails + oks if r.rows], store, ctx.today)
         for c, r in fails + infos:
             lines.append(f"- {ctx.label(c)}: {r.summary}" + (f" -> {r.file}" if r.file else ""))
-            lines += [f"    {d}" for d in r.details[:SHOW]]
-            if len(r.details) > SHOW:
-                lines.append(f"    ... and {len(r.details) - SHOW} more" + (" (all in the Excel list)" if listing else ""))
+            items = [d for d in r.details if not d.endswith("not counted")]
+            notes = [d for d in r.details if d.endswith("not counted")]
+            lines += [f"    {d}" for d in items[:SHOW]]
+            if len(items) > SHOW:
+                lines.append(f"    ... and {len(items) - SHOW} more" + (" (all in the Excel list)" if listing else ""))
+            lines += [f"    {d}" for d in notes]
         if listing:
-            lines.append(f"Full list with narrations: {listing}")
+            lines.append(f"Full list with narrations (every entry, grouped): {listing}")
         if task.get("report") == "always" and oks:
             lines.append("Clear: " + ", ".join(ctx.label(c) for c, _ in oks))
         by_reason: dict[str, list[str]] = {}
@@ -262,8 +265,10 @@ SHOW = 8                                               # items per company in th
 
 def _findings_file(task: dict, results: list, store, today) -> str | None:
     """All findings of a run as one branded Excel list (when there are more than fit in chat)."""
-    if not results or all(len(r.rows) <= SHOW for _, r in results):
+    shown = lambda r: min(len([d for d in r.details if not d.endswith("not counted")]), SHOW) if r.status == "fail" else 0  # noqa: E731
+    if not results or all(len(r.rows) <= shown(r) for _, r in results):
         return None
+    results = sorted(results, key=lambda x: (x[1].status != "fail", x[0].lower()))
     import re as _re
 
     from openpyxl import Workbook
@@ -319,7 +324,7 @@ def list_text(tasks: TallyTasks) -> str:
 
 # --- creating a task from plain words ------------------------------------------------------------
 PARAM_KEYS = {"ledger", "group", "rule", "amount", "as_of", "period", "min_amount", "versus", "threshold_pct",
-              "max_days", "voucher_type", "grace_days", "kind", "question"}
+              "max_days", "voucher_type", "grace_days", "kind", "question", "include_pdc", "include_journals"}
 
 
 def draft_prompt(today: date) -> str:

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.4 - 2026-10-10
+Future-dated entries split into likely errors and planned entries (nothing in Tally is changed).
+- future_entries: purchases, sales, receipts, payments and other vouchers dated after today are
+  reported one by one as likely errors (usually a mistyped year). Post-dated cheques (Chq / Cheque /
+  PDC voucher types) and journals entered in advance (monthly spreading of rent, AMC, fees) are shown
+  as one summary line per company and not counted as problems; include_pdc / include_journals = yes
+  counts them again. The Excel list keeps every entry with a Group column.
+- New check type journals_without_narration (period, default last month; voucher_type journal | any).
+- Summary lines are never cut off in chat; the Excel list now also covers companies with no errors.
+
 ## 0.8.3 - 2026-10-09
 Findings with narrations.
 - Future-dated entries and ledger postings now show, for each voucher: date, type, number, party,

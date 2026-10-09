@@ -197,7 +197,7 @@ def _vamount(v: dict) -> float:
 def _kind(v: dict) -> int:
     """Sort order for future entries: likely errors first, then post-dated cheques, then journals."""
     t = v["type"].lower()
-    if "journal" in t:
+    if "journal" in t or t.startswith("jv"):
         return 2
     if "chq" in t or "cheque" in t or "pdc" in t:
         return 1
@@ -223,20 +223,65 @@ def _vrow(v: dict, **more) -> dict:
             "Amount": _vamount(v), **more, "Narration": " ".join((v.get("narration") or "").split())}
 
 
+GROUP_NAMES = {0: "Likely error", 1: "Post-dated cheque", 2: "Journal in advance"}
+
+
+def _flag(p: dict, key: str) -> bool:
+    return str(p.get(key, "")).strip().lower() in ("1", "true", "yes", "y")
+
+
+def _span_text(vs: list[dict]) -> str:
+    a, b = min(v["date"] for v in vs), max(v["date"] for v in vs)
+    return f"{a:%d %b %Y}" if a == b else f"{a:%d %b %Y} - {b:%d %b %Y}"
+
+
 def future_entries(ctx: Ctx, company: str, p: dict) -> Result:
+    """Entries dated after today. Purchases / sales / receipts / payments etc. are likely errors;
+    post-dated cheques and journals entered in advance (monthly spreading) are expected and shown
+    as one summary line each, unless include_pdc / include_journals is set."""
     grace = int(_num(p, "grace_days", 0))
     start = ctx.today + timedelta(days=grace + 1)
     vs = ctx.tally.vouchers(company, start, ctx.today + timedelta(days=3650))
     if not vs:
         return Result("ok", "no entries dated in the future")
     vs.sort(key=lambda v: (_kind(v), v["date"]))
+    groups = {k: [v for v in vs if _kind(v) == k] for k in (0, 1, 2)}
+    problem = set([0] + ([1] if _flag(p, "include_pdc") else []) + ([2] if _flag(p, "include_journals") else []))
+    bad = [v for v in vs if _kind(v) in problem]
+    notes = []
+    if groups[1] and 1 not in problem:
+        notes.append(f"Post-dated cheques: {len(groups[1])} ({_span_text(groups[1])}) - not counted")
+    if groups[2] and 2 not in problem:
+        blank = sum(1 for v in groups[2] if not v.get("narration"))
+        notes.append(f"Journals in advance: {len(groups[2])} ({_span_text(groups[2])})"
+                     + (f", {blank} without narration" if blank else "") + " - not counted")
+    rows = [_vrow(v, Group=GROUP_NAMES[_kind(v)]) for v in vs]
+    if not bad:
+        return Result("ok", "no likely errors" + ("; " + "; ".join(n.replace(" - not counted", "") for n in notes)
+                                                 if notes else ""), rows=rows)
     types: dict[str, int] = {}
-    for v in vs:
+    for v in bad:
         types[v["type"] or "?"] = types.get(v["type"] or "?", 0) + 1
     by_type = ", ".join(f"{t} {n}" for t, n in sorted(types.items(), key=lambda x: -x[1]))
-    latest = max(v["date"] for v in vs)
-    return Result("fail", f"{len(vs)} entr{'y' if len(vs) == 1 else 'ies'} dated in the future "
-                          f"(latest {latest:%d %b %Y}): {by_type}",
+    word = "likely error" if problem == {0} else "entr" + ("y" if len(bad) == 1 else "ies") + " dated in the future"
+    summary = (f"{len(bad)} {word}{'s' if problem == {0} and len(bad) > 1 else ''} "
+               f"(dated up to {max(v['date'] for v in bad):%d %b %Y}): {by_type}")
+    return Result("fail", summary, [_vline(v) for v in bad] + notes, rows=rows)
+
+
+def journals_without_narration(ctx: Ctx, company: str, p: dict) -> Result:
+    """Journals (or all vouchers) in a period that have no narration."""
+    frm, to = period(p.get("period") or "last_month", ctx.today, ctx.fy_start(company, ctx.today))
+    every = (p.get("voucher_type") or "journal").strip().lower() in ("any", "all")
+    vs = [v for v in ctx.tally.vouchers(company, frm, to)
+          if (every or "journal" in v["type"].lower()) and not (v.get("narration") or "").strip()]
+    what = "vouchers" if every else "journals"
+    if len(vs) == 1:
+        what = what[:-1]
+    if not vs:
+        return Result("ok", f"all {what} {frm:%d %b} - {to:%d %b %Y} have a narration")
+    vs.sort(key=lambda v: v["date"])
+    return Result("fail", f"{len(vs)} {what} without narration {frm:%d %b} - {to:%d %b %Y}",
                   [_vline(v) for v in vs], rows=[_vrow(v) for v in vs])
 
 
@@ -402,8 +447,13 @@ class CheckType:
 
 
 CHECKS: dict[str, CheckType] = {
-    "future_entries": CheckType(future_entries, "Entries dated in the future (typing mistakes in dates).",
-                                "grace_days (default 0)"),
+    "future_entries": CheckType(future_entries, "Entries dated in the future. Purchases, sales, receipts, payments "
+                                "etc. are reported as likely errors (usually a mistyped year); post-dated cheques and "
+                                "journals entered in advance are shown as a summary line only.",
+                                "grace_days (default 0); include_pdc, include_journals (yes = count them as problems)"),
+    "journals_without_narration": CheckType(journals_without_narration, "Journals (or all vouchers) in a period "
+                                            "without a narration.",
+                                            "period (default last_month); voucher_type: journal (default) | any"),
     "last_entry": CheckType(last_entry, "Books not updated: last entry older than max_days.",
                             "max_days (default 7); voucher_type: any|sales|purchase|receipt|payment|journal|contra or a "
                             "voucher type name"),
