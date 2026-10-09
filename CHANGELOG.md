@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.3 - 2026-10-09
+Findings with narrations.
+- Future-dated entries and ledger postings now show, for each voucher: date, type, number, party,
+  amount and the narration. Future entries are sorted likely-errors first (purchases, sales, receipts,
+  payments), then post-dated cheques, then journals, and the summary counts them by voucher type.
+- When a company has more findings than fit in chat (8), the full list with narrations is saved as a
+  branded Excel file in ACE/tally/findings/ and the message gives its location.
+- Fixed the "... N more" count (it counted the shortened list, not all findings).
+
 ## 0.8.2 - 2026-10-09
 Fix: the first real Tally task failed in all 59 companies (TypeError on a voucher without a date).
 - Tally adds empty voucher elements to collection lists; ACE now skips any voucher without a date

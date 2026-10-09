@@ -99,7 +99,7 @@ def test_checks_find_problems(ft, tmp_path):
     ft.postings = [{"date": date(2026, 10, 6), "number": "J-12", "type": "Journal", "narration": "unknown receipt",
                     "party": "", "lines": [("Suspense A/c", -1500.0), ("Emirates NBD", 1500.0)]}]
     r = run_check(ctx, "ledger_postings", CO, {"ledger": "suspense", "period": "last_7_days"})
-    assert r.status == "fail" and r.details[0] == "06 Oct 2026 Journal J-12 Suspense A/c: 1,500.00 Dr - unknown receipt"
+    assert r.status == "fail" and r.details[0] == "06 Oct 2026 Journal J-12 - 1,500.00 - Suspense A/c: 1,500.00 Dr - unknown receipt"
 
     r = run_check(ctx, "compare", CO, {"ledger": "Sales", "period": "last_month", "threshold_pct": 30})
     assert r.status == "fail" and "+67%" in r.summary                         # 100,000 vs 60,000
@@ -271,3 +271,25 @@ def test_same_error_in_many_companies_is_one_line(ft, tmp_path):
 def TaskStoreForTest(tmp_path):
     from app.tasks import TaskStore
     return TaskStore(tmp_path / "t.db")
+
+
+def test_future_entries_show_narration_and_full_list_goes_to_excel(ft, tmp_path):
+    from app.tasks import TaskStore
+    tasks = tt.TallyTasks(TaskStore(tmp_path / "t.db"))
+    task = tasks.add({"name": "Future", "check": "future_entries", "params": {}, "schedule": "manual"})
+    jv = [{"date": date(2026, 10 + i % 3, 28), "number": str(500 + i), "type": "Journal", "party": "",
+           "narration": "Being rent   amortisation for the month", "lines": [("Rent", -1000.0), ("Prepaid rent", 1000.0)]}
+          for i in range(12)]
+    inv = {"date": date(2026, 11, 30), "number": "CI-2025-01969", "type": "Pur-Credit-Jun", "party": "Al Islami Foods",
+           "narration": "Inv dated 30.11.2025", "lines": [("Al Islami Foods", 1050.0), ("Purchases", -1000.0),
+                                                           ("Input VAT", -50.0)]}
+    ft.future = jv + [inv]
+    out = tt.run_task(task, ft, tasks, register={}, today=TODAY, store=LocalStore(tmp_path / "t"))
+    assert "13 entries dated in the future (latest 28 Dec 2026): Journal 12, Pur-Credit-Jun 1" in out
+    first = out.split("\n")[2]                          # likely errors first, with party, amount and narration
+    assert first == "    30 Nov 2026 Pur-Credit-Jun CI-2025-01969 - Al Islami Foods - 1,050.00 - Inv dated 30.11.2025"
+    assert "Being rent amortisation for the month" in out and "    ... and 5 more (all in the Excel list)" in out
+    path = out.split("Full list with narrations: ")[1].strip()
+    ws = load_workbook(path).active
+    assert ws["A5"].value == "Company" and ws["G5"].value == "Narration"
+    assert ws["A7"].value == CO and ws["D7"].value == "CI-2025-01969" and ws.max_row == 6 + 13

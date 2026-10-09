@@ -29,6 +29,7 @@ class Result:
     summary: str
     details: list[str] = field(default_factory=list)
     file: str | None = None
+    rows: list[dict] = field(default_factory=list)    # every item, for the Excel list of findings
 
 
 class CheckError(ValueError):
@@ -188,18 +189,55 @@ def _num(p: dict, key: str, default: float) -> float:
 
 
 # --- the checks ----------------------------------------------------------------------------
+def _vamount(v: dict) -> float:
+    """Voucher amount: total of the debit lines."""
+    return sum(-a for _, a in v["lines"] if a < 0)
+
+
+def _kind(v: dict) -> int:
+    """Sort order for future entries: likely errors first, then post-dated cheques, then journals."""
+    t = v["type"].lower()
+    if "journal" in t:
+        return 2
+    if "chq" in t or "cheque" in t or "pdc" in t:
+        return 1
+    return 0
+
+
+def _vline(v: dict, extra: str = "") -> str:
+    parts = [f"{v['date']:%d %b %Y} {v['type']} {v['number']}".strip()]
+    if v.get("party"):
+        parts.append(v["party"])
+    amt = _vamount(v)
+    if amt:
+        parts.append(f"{amt:,.2f}")
+    if extra:
+        parts.append(extra)
+    if v.get("narration"):
+        parts.append(" ".join(v["narration"].split())[:90])
+    return " - ".join(parts)
+
+
+def _vrow(v: dict, **more) -> dict:
+    return {"Date": v["date"], "Type": v["type"], "Number": v["number"], "Party": v.get("party", ""),
+            "Amount": _vamount(v), **more, "Narration": " ".join((v.get("narration") or "").split())}
+
+
 def future_entries(ctx: Ctx, company: str, p: dict) -> Result:
     grace = int(_num(p, "grace_days", 0))
     start = ctx.today + timedelta(days=grace + 1)
     vs = ctx.tally.vouchers(company, start, ctx.today + timedelta(days=3650))
     if not vs:
         return Result("ok", "no entries dated in the future")
-    vs.sort(key=lambda v: v["date"])
-    details = [f"{v['date']:%d %b %Y} {v['type']} {v['number']}".strip() for v in vs[:10]]
-    if len(vs) > 10:
-        details.append(f"... and {len(vs) - 10} more")
+    vs.sort(key=lambda v: (_kind(v), v["date"]))
+    types: dict[str, int] = {}
+    for v in vs:
+        types[v["type"] or "?"] = types.get(v["type"] or "?", 0) + 1
+    by_type = ", ".join(f"{t} {n}" for t, n in sorted(types.items(), key=lambda x: -x[1]))
+    latest = max(v["date"] for v in vs)
     return Result("fail", f"{len(vs)} entr{'y' if len(vs) == 1 else 'ies'} dated in the future "
-                          f"(latest {vs[-1]['date']:%d %b %Y})", details)
+                          f"(latest {latest:%d %b %Y}): {by_type}",
+                  [_vline(v) for v in vs], rows=[_vrow(v) for v in vs])
 
 
 VTYPES = {"sales": "IsSales", "purchase": "IsPurchase", "receipt": "IsReceipt", "payment": "IsPayment",
@@ -259,13 +297,11 @@ def ledger_postings(ctx: Ctx, company: str, p: dict) -> Result:
     if not hits:
         return Result("ok", f"no postings to {desc} {frm:%d %b} - {to:%d %b %Y}")
     hits.sort(key=lambda h: h[0]["date"] or date.min)
-    details = [f"{v['date']:%d %b %Y} {v['type']} {v['number']} {ledger}: {_money(a)}"
-               + (f" - {v['narration'][:60]}" if v["narration"] else "") for v, ledger, a in hits[:15]]
-    if len(hits) > 15:
-        details.append(f"... and {len(hits) - 15} more")
+    details = [_vline(v, f"{ledger}: {_money(a)}") for v, ledger, a in hits]
     total = sum(a for _, _, a in hits)
     return Result("fail", f"{len(hits)} posting{'s' if len(hits) > 1 else ''} to {desc} "
-                          f"{frm:%d %b} - {to:%d %b %Y} (net {_money(total)})", details)
+                          f"{frm:%d %b} - {to:%d %b %Y} (net {_money(total)})", details,
+                  rows=[_vrow(v, Ledger=ledger, **{"Ledger amount": a}) for v, ledger, a in hits])
 
 
 def _movement(ctx: Ctx, company: str, p: dict, frm: date, to: date) -> tuple[str, float]:

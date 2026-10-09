@@ -229,11 +229,14 @@ def run_task(task: dict, tally, tasks: TallyTasks, register: dict | None = None,
                                         f"{len(infos)} done" if infos else "",
                                         f"{len(errors)} could not be checked" if errors else ""] if x))
         lines = [head]
+        listing = _findings_file(task, [(ctx.label(c), r) for c, r in fails if r.rows], store, ctx.today)
         for c, r in fails + infos:
             lines.append(f"- {ctx.label(c)}: {r.summary}" + (f" -> {r.file}" if r.file else ""))
-            lines += [f"    {d}" for d in r.details[:8]]
-            if len(r.details) > 8:
-                lines.append(f"    ... {len(r.details) - 8} more")
+            lines += [f"    {d}" for d in r.details[:SHOW]]
+            if len(r.details) > SHOW:
+                lines.append(f"    ... and {len(r.details) - SHOW} more" + (" (all in the Excel list)" if listing else ""))
+        if listing:
+            lines.append(f"Full list with narrations: {listing}")
         if task.get("report") == "always" and oks:
             lines.append("Clear: " + ", ".join(ctx.label(c) for c, _ in oks))
         by_reason: dict[str, list[str]] = {}
@@ -252,6 +255,48 @@ def run_task(task: dict, tally, tasks: TallyTasks, register: dict | None = None,
         summary = head.split(": ", 1)[-1]
         tasks.update(task["id"], last_run=now().isoformat(timespec="seconds"), last_summary=summary)
         return "\n".join(lines)
+
+
+SHOW = 8                                               # items per company in the chat message
+
+
+def _findings_file(task: dict, results: list, store, today) -> str | None:
+    """All findings of a run as one branded Excel list (when there are more than fit in chat)."""
+    if not results or all(len(r.rows) <= SHOW for _, r in results):
+        return None
+    import re as _re
+
+    from openpyxl import Workbook
+
+    from app.brand import AED, DATE, Sheet, save
+    from app.storage import free_name
+    keys: list[str] = []
+    for _, r in results:
+        for row in r.rows:
+            keys += [k for k in row if k not in keys]
+    wb = Workbook()
+    widths = {"Date": 12, "Type": 18, "Number": 16, "Party": 30, "Amount": 15, "Ledger": 26, "Ledger amount": 15,
+              "Narration": 70}
+    sh = Sheet(wb, "Findings", f"Tally check {task['id']} - {task['name']}",
+               f"Run {today:%d-%b-%Y} | {sum(len(r.rows) for _, r in results)} items in {len(results)} companies | "
+               "Source: Tally (read-only) | Prepared by ACE", [32] + [widths.get(k, 18) for k in keys], first=True)
+    sh.header(["Company"] + keys)
+    for label, r in results:
+        sh.band(f"{label} - {r.summary}")
+        for row in r.rows:
+            sh.line([label] + [row.get(k) for k in keys],
+                    [None] + [DATE if k == "Date" else AED if "mount" in k else None for k in keys])
+    sh.footer("All clients", f"Tally check {task['id']}")
+    if store is None:
+        from app.tally_register import _store
+        store = _store()
+    name = _re.sub(r'[\\/:*?"<>|]', "-", f"Check {task['id']} {task['name']} {today:%Y-%m-%d}.xlsx")
+    name = free_name(store, ["findings"], name)
+    try:
+        return store.save(["findings", name], save(wb))
+    except Exception as exc:  # noqa: BLE001 - the chat message still goes out
+        log.warning("findings file: %s", exc)
+        return None
 
 
 def task_text(t: dict) -> str:
