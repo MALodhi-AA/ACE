@@ -246,3 +246,28 @@ def test_logo_goes_top_left_when_available(tmp_path):
     sh = Sheet(wb, "S", "Title", "sub", [20, 20], first=True, logo_bytes=buf.getvalue())
     sh.header(["a", "b"])
     assert len(sh.ws._images) == 1 and sh.ws["A2"].value == "Title" and sh.ws["A6"].value == "a"
+
+
+def test_closed_companies_are_left_out_of_all_companies(ft, tmp_path):
+    closed = "Z (Closed) Mara JLT Branch (E-1)"
+    names = [CO, closed]
+    assert tt.select_companies("all", names, {}) == ([CO], [])
+    assert tt.select_companies([closed], names, {}) == ([closed], [])         # still checkable by name
+    ft.companies = lambda: [{"name": closed, "starting_from": date(2023, 1, 1), "books_from": None}]
+    where, _ = draft(ft, store=LocalStore(tmp_path), today=TODAY)
+    assert load_workbook(where).worksheets[0]["C6"].value == "N"
+
+
+def test_same_error_in_many_companies_is_one_line(ft, tmp_path):
+    store = TaskStoreForTest(tmp_path)
+    tasks = tt.TallyTasks(store)
+    task = tasks.add({"name": "Bad", "check": "ledger_balance", "params": {"ledger": "Nope"}, "schedule": "manual"})
+    names = [f"Co {i}" for i in range(6)]
+    ft.companies = lambda: [{"name": n, "starting_from": date(2026, 1, 1), "books_from": None} for n in names]
+    out = tt.run_task(task, ft, tasks, register={}, today=TODAY)
+    assert "- 6 companies could not be checked - no ledger 'Nope' in this company: Co 0, Co 1, Co 2, Co 3, Co 4 ..." in out
+
+
+def TaskStoreForTest(tmp_path):
+    from app.tasks import TaskStore
+    return TaskStore(tmp_path / "t.db")

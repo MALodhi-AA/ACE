@@ -130,7 +130,8 @@ def test_probe_date_check(capsys):
     t = Tally(url="http://tally:9000", transport=httpx.MockTransport(handler))
     assert probe.main(["--company", "mara", "--dates"], tally=t) == 0
     out = capsys.readouterr().out
-    assert "Vouchers, period as filter: 2 vouchers, 30 Sep 2026 to 03 Oct 2026" in out
+    assert "Vouchers, period as filter: no vouchers" in out                # fake vouchers are outside 2024
+    assert "Vouchers, no period given: 2 vouchers, 30 Sep 2026 to 03 Oct 2026" in out
     assert "Trial Balance to 31 Dec 2024: debits 5,000.00 / credits 5,000.00" in out
 
 
@@ -152,3 +153,12 @@ def test_voucher_lines_are_parsed():
     t = Tally(url="http://tally:9000", transport=httpx.MockTransport(lambda r: httpx.Response(200, content=xml)))
     v = t.vouchers("Mara", date(2026, 10, 1), date(2026, 10, 7))[0]
     assert v["date"] == date(2026, 10, 6) and v["number"] == "J-12" and v["lines"] == [("Suspense A/c", -1500.0), ("Bank", 1500.0)]
+
+
+def test_empty_and_out_of_period_voucher_elements_are_ignored():
+    xml = b"""<ENVELOPE><VOUCHER><DATE>20300915</DATE><VOUCHERNUMBER>45</VOUCHERNUMBER>
+    <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME></VOUCHER><VOUCHER/><VOUCHER><DATE>20250101</DATE></VOUCHER></ENVELOPE>"""
+    t = Tally(url="http://tally:9000", transport=httpx.MockTransport(lambda r: httpx.Response(200, content=xml)))
+    vs = t.vouchers("Mara", date(2026, 10, 10), date(2036, 10, 10))
+    assert [(v["date"], v["number"]) for v in vs] == [(date(2030, 9, 15), "45")]
+    assert t.voucher_dates("Mara", date(2026, 10, 10), date(2036, 10, 10)) == [date(2030, 9, 15)]

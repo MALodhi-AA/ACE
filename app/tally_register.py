@@ -166,7 +166,7 @@ def draft(tally, store=None, today: date | None = None, existing: dict[str, Clie
         fy = c.get("starting_from")
         values = [name,
                   old.short if old else re.sub(r"\s*\((?:E-\d+|c)\)\s*", " ", name).strip(),
-                  ("Y" if old.include else "N") if old else "Y",
+                  ("Y" if old.include else "N") if old else ("N" if re.search(r"\(closed\)", name, re.I) else "Y"),
                   old.staff if old else "", old.manager if old else "",
                   old.vat_period if old else "", old.vat_quarter_ends if old else "",
                   old.fy_start if old and old.fy_start else (f"{fy.day}-{fy:%b}" if fy else ""),

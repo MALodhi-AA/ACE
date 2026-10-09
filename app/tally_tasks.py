@@ -175,7 +175,9 @@ def select_companies(spec, open_companies: list[str], register: dict) -> tuple[l
     """(companies to check, names that matched nothing)."""
     from app.tally_register import match_company
     if spec in (None, "all", ["all"]):
-        return [c for c in open_companies if not register.get(c) or register[c].include], []
+        # closed companies ("Z (Closed) ...") are left out unless the register says Include = Y
+        return [c for c in open_companies
+                if (register[c].include if register.get(c) else not re.search(r"\(closed\)", c, re.I))], []
     if isinstance(spec, dict):
         k, v = next(iter(spec.items()))
         v = str(v).strip().lower()
@@ -234,8 +236,15 @@ def run_task(task: dict, tally, tasks: TallyTasks, register: dict | None = None,
                 lines.append(f"    ... {len(r.details) - 8} more")
         if task.get("report") == "always" and oks:
             lines.append("Clear: " + ", ".join(ctx.label(c) for c, _ in oks))
+        by_reason: dict[str, list[str]] = {}
         for c, r in errors:
-            lines.append(f"- {ctx.label(c)}: could not check - {r.summary}")
+            by_reason.setdefault(r.summary, []).append(ctx.label(c))
+        for reason, names_ in by_reason.items():
+            if len(names_) <= 3:
+                lines += [f"- {n}: could not check - {reason}" for n in names_]
+            else:                                         # one line for the same problem in many companies
+                lines.append(f"- {len(names_)} companies could not be checked - {reason}: "
+                             + ", ".join(names_[:5]) + (" ..." if len(names_) > 5 else ""))
         if missing:
             lines.append("Not found in Tally (is it open?): " + ", ".join(missing))
         if not companies:

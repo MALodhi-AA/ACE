@@ -240,7 +240,8 @@ class Tally:
         formulas.update(extra or {})
         rows = self.collection("ACEVoucherDates", "Voucher", ["Date"], company=company, frm=frm, to=to,
                                formulas=formulas)
-        return sorted(d for d in (parse_tally_date(v.findtext("DATE")) for v in rows) if d)
+        return sorted(d for d in (parse_tally_date(v.findtext("DATE")) for v in rows)
+                      if d and (not frm or d >= frm) and (not to or d <= to))
 
     def last_voucher_date(self, company: str, frm: date | None = None, to: date | None = None) -> date | None:
         """Date of the latest voucher in the period (books up to date?)."""
@@ -296,7 +297,10 @@ class Tally:
                         lines.append((name, amount(e.findtext("AMOUNT"))))
                 if lines:
                     break
-            out.append({"date": parse_tally_date(v.findtext("DATE")),
+            d = parse_tally_date(v.findtext("DATE"))
+            if d is None or not (frm <= d <= to):
+                continue                  # empty elements Tally adds to the list, or outside the period
+            out.append({"date": d,
                         "number": (v.findtext("VOUCHERNUMBER") or "").strip(),
                         "type": (v.findtext("VOUCHERTYPENAME") or "").strip(),
                         "narration": (v.findtext("NARRATION") or "").strip(),

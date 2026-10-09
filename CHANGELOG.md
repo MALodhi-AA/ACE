@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.2 - 2026-10-09
+Fix: the first real Tally task failed in all 59 companies (TypeError on a voucher without a date).
+- Tally adds empty voucher elements to collection lists; ACE now skips any voucher without a date
+  and also keeps only vouchers inside the period asked for (double safety for date filters).
+- Companies whose name contains "(Closed)" are left out of "all companies" checks (still checkable
+  by name) and drafted with Include = N in the client register.
+- When many companies fail with the same problem, the report shows it once with the company names.
+
 ## 0.8.1 - 2026-10-09
 Every document ACE produces uses the Accountability Accountants house style.
 - app/brand.py: shared house style (navy title bar, grey sub-title, green accent line, teal headers,
