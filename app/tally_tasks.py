@@ -108,7 +108,8 @@ def companies_text(spec) -> str:
     if isinstance(spec, dict):
         k, v = next(iter(spec.items()))
         return {"staff": f"companies kept by {v}", "manager": f"companies managed by {v}",
-                "vat": f"{v} VAT companies"}.get(k, f"{k} = {v}")
+                "vat": f"{v} VAT companies", "group": f"all units of the {v} group",
+                "entity": f"all units of entity {v}"}.get(k, f"{k} = {v}")
     return ", ".join(spec)
 
 
@@ -186,8 +187,16 @@ def select_companies(spec, open_companies: list[str], register: dict) -> tuple[l
             r = register.get(c)
             if not r or not r.include:
                 continue
-            field = {"staff": r.staff, "manager": r.manager, "vat": r.vat_period}.get(k, "")
-            if v and v in field.lower():
+            field = {"staff": r.staff, "manager": r.manager, "vat": r.vat_period, "group": r.group,
+                     "entity": r.entity}.get(k, "")
+            if k == "entity":
+                from app.tally_register import entity_code
+                hit = bool(field) and field.lower() == (entity_code(v) or v).lower()
+            elif k == "group":
+                hit = bool(field) and field.lower() == v
+            else:
+                hit = bool(v) and v in field.lower()
+            if hit:
                 pick.append(c)
         return pick, ([] if pick else [f"{k} = {v} (fill the client register)"])
     out, missing = [], []
@@ -253,6 +262,12 @@ def run_task(task: dict, tally, tasks: TallyTasks, register: dict | None = None,
                              + ", ".join(names_[:5]) + (" ..." if len(names_) > 5 else ""))
         if missing:
             lines.append("Not found in Tally (is it open?): " + ", ".join(missing))
+        if register:
+            from app.tally_register import check
+            issues = check(register, open_companies=names)
+            if issues:
+                lines.append(f"Client register: {len(issues)} point{'s' if len(issues) > 1 else ''} to fix - "
+                             "send 'check client register'.")
         if not companies:
             lines.append("No companies to check.")
         summary = head.split(": ", 1)[-1]
@@ -338,7 +353,7 @@ def draft_prompt(today: date) -> str:
             "last_quarter | this_year | last_year | YYYY-MM-DD..YYYY-MM-DD\n"
             "schedule: manual | daily HH:MM | weekdays HH:MM | weekly mon HH:MM | monthly D HH:MM (D 1-28), 24h clock.\n"
             "companies: \"all\" | [list of company names as written] | {\"staff\": name} | {\"manager\": name} | "
-            "{\"vat\": \"monthly\"|\"quarterly\"}\n"
+            "{\"vat\": \"monthly\"|\"quarterly\"} | {\"group\": name} | {\"entity\": \"E-1\"}\n"
             "report: exceptions (only problems, default) | always\n"
             "Reply with JSON only: {\"name\": short title, \"check\": type, \"params\": {...}, \"companies\": ..., "
             "\"schedule\": ..., \"report\": ..., \"question\": null or what is unclear}")

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.8.5 - 2026-10-10
+Client register with groups, entities and units, plus inter-company ledgers.
+- Structure: Group -> Entity (E-1, E-2 ... the legal / tax person) -> Unit (each Tally company). Units with
+  the same entity code are one entity whatever the brand; a unit without a code is a stand-alone entity.
+- Two sheets (drafted by ACE, completed by the team, saved as ACE/tally/Client Register.xlsx):
+  Units - Tally company, short name, include, group, entity code, entity legal name, TRN, VAT period,
+  VAT quarter ends, CT TRN, FY start, VAT group, CT tax group, staff, manager, bank / cash / suspense
+  ledgers, last entry, notes. ACE takes the entity code from the name ("stand-alone?" when none),
+  suggests the group from the names (units of one entity share their entity's group).
+  Inter-company - ledgers under Branch / Divisions and Sundry Debtors / Creditors matched to other units
+  (exact / partial / close / none), relationship worked out by ACE (same entity / same VAT group /
+  same group / different group), Confirmed Y (exact matches pre-set). Unmatched Branch / Divisions
+  ledgers are listed for the team.
+- VAT group / CT tax group columns are ready for future tax groups.
+- A new draft keeps everything already filled in the current register.
+- "check client register": units, entities, groups, stand-alone units, confirmed links, and points to
+  fix (units of one entity that disagree on TRN / VAT period / FY / legal name / tax groups, quarterly
+  VAT without quarter ends, units missing from Tally or from the register, unknown counterparties).
+  Tally check results mention when the register has points to fix.
+- Tasks can target {"group": ...} or {"entity": "E-1"}.
+- Fix: note lines under a table were read as an extra company.
+
 ## 0.8.4 - 2026-10-10
 Future-dated entries split into likely errors and planned entries (nothing in Tally is changed).
 - future_entries: purchases, sales, receipts, payments and other vouchers dated after today are

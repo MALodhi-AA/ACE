@@ -120,25 +120,97 @@ def test_register_draft_and_load(ft, tmp_path):
     store = LocalStore(tmp_path)
     where, n = draft(ft, store=store, today=TODAY)
     assert n == 2 and where.endswith("Client Register (draft) 2026-10-07.xlsx")
-    ws = load_workbook(where).worksheets[0]
+    wb = load_workbook(where)
+    assert wb.sheetnames == ["Units", "Inter-company", "How to fill"]
+    ws = wb["Units"]
     assert ws["A5"].value == "Tally company" and ws["A1"].fill.start_color.rgb.endswith("002D49")
     row = [c.value for c in ws[6]]
-    assert ws["D6"].fill.start_color.rgb.endswith("FFFF00")                 # staff to be filled in
-    assert row[0] == CO and row[1] == "Mara Lounge Al Wasl" and row[7] == "1-Jan"
-    assert row[9] == "Emirates NBD" and row[10] == "Cash" and row[11] == "Suspense A/c" and row[12] == "05 Oct 2026"
+    assert row[:5] == [CO, "Mara Lounge Al Wasl", "Y", "Mara", "E-1"] and row[10] == "1-Jan"
+    assert row[15:19] == ["Emirates NBD", "Cash", "Suspense A/c", "05 Oct 2026"]
+    assert ws["N6"].fill.start_color.rgb.endswith("FFFF00") and ws["D6"].fill.start_color.rgb.endswith("FFFF00")
+    assert ws["E7"].value == "stand-alone?"                                   # Volt Electric FZE: no code
     assert draft(ft, store=store, today=TODAY)[0].endswith("2026-10-07_v2.xlsx")       # never overwrites
 
-    wb = load_workbook(where)
-    wb.worksheets[0]["B6"] = "Al Wasl"
-    wb.worksheets[0]["D6"] = "Aiman"
-    wb.worksheets[0]["C7"] = "N"
+    ws["B6"] = "Al Wasl"
+    ws["N6"] = "Aiman"
+    ws["C7"] = "N"
+    ws["E7"] = None                                                           # confirmed stand-alone
     wb.save(tmp_path / REGISTER)
     reg = load(store)
     assert reg[CO].short == "Al Wasl" and reg[CO].staff == "Aiman" and not reg[CO2].include
+    assert reg[CO].entity == "E-1" and reg[CO].group == "Mara" and reg[CO2].entity == ""
     names = [c["name"] for c in ft.companies()]
     assert tt.select_companies("all", names, reg) == ([CO], [])
     assert tt.select_companies({"staff": "aiman"}, names, reg) == ([CO], [])
+    assert tt.select_companies({"entity": "e1"}, names, reg) == ([CO], [])
+    assert tt.select_companies({"group": "Mara"}, names, reg) == ([CO], [])
     assert tt.select_companies(["al wasl", "Zeta"], names, reg) == ([CO], ["Zeta"])
+    old = load(store)
+    wb2 = load_workbook(draft(ft, store=store, today=TODAY)[0])               # a new draft keeps what was filled in
+    assert [c.value for c in wb2["Units"][6]][:5] == [CO, "Al Wasl", "Y", "Mara", "E-1"] and old
+
+
+def test_register_check_finds_disagreements():
+    from app.tally_register import Client, Link, check, relationship
+    reg = {"A (E-1)": Client("A (E-1)", group="Mara", entity="E-1", trn="100"),
+           "B (E-1)": Client("B (E-1)", group="Mara", entity="E-1", trn="200", vat_period="Quarterly"),
+           "C": Client("C", group="Mara"), "D": Client("D", group="Volt", vat_group="VG1"),
+           "E": Client("E", group="Mara", vat_group="vg1")}
+    issues = check(reg, [Link("A (E-1)", "Zed", "Branch / Divisions", "Zed", confirmed=True)],
+                   ["A (E-1)", "B (E-1)", "C", "D", "E", "New Co"])
+    assert "E-1: units disagree on TRN (100 / 200)" in issues
+    assert "B (E-1): quarterly VAT but no quarter-end months" in issues
+    assert "Open in Tally but not in the register: New Co" in issues
+    assert "Inter-company: A (E-1) / Zed -> unknown counterparty 'Zed'" in issues
+    assert relationship("A (E-1)", "B (E-1)", reg) == "same entity"
+    assert relationship("A (E-1)", "C", reg) == "same group"
+    assert relationship("D", "E", reg) == "same VAT group"
+    assert relationship("C", "D", reg) == "different group"
+
+
+def test_group_suggestions_and_entity_codes():
+    from app.tally_register import entity_code, suggest_groups
+    names = ["Abrahamic House (E-2)", "Fusion Line Al Bateen (E-2)", "Fusion Line Fujairah (E-3)", "Food Box Ajman",
+             "Food Box Sharjah", "Volt Kitchen Ajman", "Volt Cafeteria LLC", "Link by Mara Al Qarayen (E-1)", "Flux Cafe"]
+    g = suggest_groups(names)
+    assert g["Abrahamic House (E-2)"] == "Fusion Line"            # follows its entity E-2
+    assert g["Food Box Ajman"] == "Food Box" and g["Volt Cafeteria LLC"] == "Volt"
+    assert g["Link by Mara Al Qarayen (E-1)"] == "Mara" and "Flux Cafe" not in g
+    assert entity_code("Mara (E-12)") == "E-12" and entity_code("e1") == "E-1" and entity_code("Flux Cafe") == ""
+
+
+class IcTally(FakeTally):
+    def companies(self):
+        return [{"name": n, "starting_from": date(2025, 1, 1), "books_from": None}
+                for n in (CO, "Solenn ADEC (E-1)", "Food Box Ajman")]
+
+    def groups(self, company):
+        return {**super().groups(company), "Branch / Divisions": "", "Sundry Debtors": "Current Assets",
+                "Inter Branch": "Branch / Divisions"}
+
+    def ledgers(self, company, frm=None, to=None):
+        extra = [Ledger("Solenn ADEC", "Inter Branch", 0, -100.0), Ledger("Food Box Ajman LLC", "Sundry Debtors", 0, 5.0),
+                 Ledger("Break by Mara Al Ain Oasis", "Branch / Divisions", 0, 1.0), Ledger("Carrefour", "Sundry Debtors", 0, 9.0)]
+        return super().ledgers(company, frm, to) + (extra if company == CO else [])
+
+
+def test_intercompany_sheet_is_drafted_and_read(tmp_path):
+    from app.tally_register import load_links
+    store = LocalStore(tmp_path)
+    where, _ = draft(IcTally(), store=store, today=TODAY)
+    ws = load_workbook(where)["Inter-company"]
+    rows = [[c.value for c in r] for r in ws.iter_rows(min_row=6, max_row=8)]
+    assert rows[0] == [CO, "Solenn ADEC", "Inter Branch", "Solenn ADEC (E-1)", "exact", "same entity", "Y", None]
+    assert rows[1][:7] == [CO, "Food Box Ajman LLC", "Sundry Debtors", "Food Box Ajman", "exact", "unknown", "Y"]
+    assert rows[2][:7] == [CO, "Break by Mara Al Ain Oasis", "Branch / Divisions", None, "none", None, None]
+    assert ws["D8"].fill.start_color.rgb.endswith("FFFF00")
+    assert all("Carrefour" not in str(r) for r in ws.iter_rows(values_only=True))     # ordinary customer
+    import shutil
+    shutil.copy(where, tmp_path / REGISTER)
+    links = load_links(store)
+    assert [(l.ledger, l.counterparty) for l in links] == [("Solenn ADEC", "Solenn ADEC (E-1)"),
+                                                           ("Food Box Ajman LLC", "Food Box Ajman")]
+    assert len(load_links(store, confirmed_only=False)) == 3
 
 
 def test_schedules():
@@ -255,7 +327,7 @@ def test_closed_companies_are_left_out_of_all_companies(ft, tmp_path):
     assert tt.select_companies([closed], names, {}) == ([closed], [])         # still checkable by name
     ft.companies = lambda: [{"name": closed, "starting_from": date(2023, 1, 1), "books_from": None}]
     where, _ = draft(ft, store=LocalStore(tmp_path), today=TODAY)
-    assert load_workbook(where).worksheets[0]["C6"].value == "N"
+    assert load_workbook(where)["Units"]["C6"].value == "N"
 
 
 def test_same_error_in_many_companies_is_one_line(ft, tmp_path):
@@ -320,3 +392,19 @@ def test_journals_without_narration(ft):
     assert r.status == "fail" and r.summary == "1 journal without narration 01 Sep - 30 Sep 2026"
     r = run_check(Ctx(ft, today=TODAY), "journals_without_narration", CO, {"voucher_type": "any"})
     assert r.summary.startswith("2 vouchers without narration")
+
+
+def test_check_client_register_command(office, tmp_path):  # noqa: F811
+    import shutil
+    chat, w, replies, clock, say = office
+    a = w.assistant
+    a.tally, a.tally_store = IcTally(), LocalStore(tmp_path / "reg")
+    say(MA, "hi")
+    say(MA, "check client register")
+    assert "no Client Register.xlsx" in last_to(chat, DM_MA)
+    where, _ = draft(a.tally, store=a.tally_store, today=TODAY)
+    shutil.copy(where, tmp_path / "reg" / REGISTER)
+    say(MA, "check client register")
+    out = last_to(chat, DM_MA)
+    assert out.startswith("Client register: 3 units, 1 entities, 1 groups, 1 stand-alone units, "
+                          "2 confirmed inter-company links.")

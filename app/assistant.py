@@ -886,7 +886,7 @@ Today is {now():%A %d %B %Y}. Their open tasks:
         """Built-in Tally commands (no AI). True if handled."""
         from app import tally_tasks as tt
         low = t.strip().lower()
-        if not re.match(r"^\s*(tally|draft\s+(the\s+)?client\s+register|client\s+register)\b", low):
+        if not re.match(r"^\s*(tally|draft\s+(the\s+)?client\s+register|client\s+register|check\s+(the\s+)?client\s+register)\b", low):
             return False
         if not self.tally:
             say("Tally is not connected (set TALLY_URL in .env).")
@@ -897,14 +897,33 @@ Today is {now():%A %d %B %Y}. Their open tasks:
             def work():
                 try:
                     where, n = draft(self.tally, store=self.tally_store)
-                    msg = (f"Client register drafted from Tally ({n} companies): {where}\n"
-                           "Fill in short name, staff, manager, VAT period, TRN, check the ledgers, then save it as "
-                           "'Client Register.xlsx' in the same folder. I read it before every Tally check.")
+                    msg = (f"Client register drafted from Tally ({n} units): {where}\n"
+                           "Sheet Units: confirm group and entity code, fill the yellow cells (entity details, staff, "
+                           "manager). Sheet Inter-company: confirm the links with Y. Then save it as "
+                           "'Client Register.xlsx' in the same folder - I read it before every Tally check.")
                 except Exception as exc:  # noqa: BLE001
                     msg = f"I couldn't draft the client register: {exc}"
                 say(msg)
             say("Drafting the client register from Tally - this takes a few minutes for all companies.")
             self._bg(work)
+            return True
+        if re.match(r"^\s*check\s+(the\s+)?client\s+register\b", low):
+            from app.tally_register import check, load, load_links
+            try:
+                names = [c["name"] for c in self.tally.companies()]
+            except Exception:  # noqa: BLE001
+                names = None
+            reg = load(self.tally_store)
+            if not reg:
+                say("There is no Client Register.xlsx in ACE/tally yet - send 'draft client register'.")
+                return True
+            issues = check(reg, load_links(self.tally_store), names)
+            ents = {c.entity for c in reg.values() if c.entity}
+            head = (f"Client register: {len(reg)} units, {len(ents)} entities, "
+                    f"{len({c.group for c in reg.values() if c.group})} groups, "
+                    f"{sum(1 for c in reg.values() if not c.entity)} stand-alone units, "
+                    f"{len(load_links(self.tally_store))} confirmed inter-company links.")
+            say(head + ("\nPoints to fix:\n" + "\n".join(f"- {i}" for i in issues) if issues else "\nNo inconsistencies."))
             return True
         if re.match(r"^\s*tally\s+(tasks|checks)\s*$", low):
             say(tt.list_text(self.tally_tasks))
